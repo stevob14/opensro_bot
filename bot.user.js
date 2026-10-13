@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OpenSRO Bot
 // @namespace    http://127.0.0.1:5180/
-// @version      1.2.82
+// @version      1.2.83
 // @updateURL    https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @downloadURL  https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OpenSRO Bot] Another SRO assistant is active. Disable it and reload to use OpenSRO Bot.');
   return;
 }
-const VERSION = '1.2.82';
+const VERSION = '1.2.83';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -6287,6 +6287,7 @@ const UI = {
     this.root = host.attachShadow({ mode: 'open' });
     const style = el('style');
     style.textContent = ':host{' + Object.entries(LEAN_SKIN).map(([key, data]) => `--s-${key}:url("${data}");`).join('') + '}\n' + LEAN_CSS + '\n:host([hidden]){display:none!important}';
+    style.textContent += '\n.status{height:98px;overflow:hidden}\n.waiting{height:48px;overflow:hidden}';
     const panel = el('section', null, 'panel'), header = el('header');
     const fold = this.button('−', () => { this.body.hidden = !this.body.hidden; fold.textContent = this.body.hidden ? '+' : '−'; });
     fold.className = 'fold'; fold.setAttribute('aria-label', 'Fold or unfold bot window');
@@ -6609,7 +6610,7 @@ const UI = {
     Alchemy.refresh();
     if (this.current === 'Combat' && this.combatTab === 'Buffs & imbue' && BuffGear.note) BuffGear.note.textContent = BuffGear.status();
     const diagnosticState = Diagnostics.sample();
-    if (this.waitNote) this.waitNote.textContent = Diagnostics.lines(diagnosticState);
+    if (this.waitNote) { this.waitNote.textContent = Diagnostics.lines(diagnosticState); this.waitNote.title = this.waitNote.textContent; }
     if (this.townNote) this.townNote.textContent = Town.status();
     if (this.current === 'Settings' && AutoMastery.note) AutoMastery.note.textContent = AutoMastery.status();
     if (this.current === 'Settings' && this.stuckNote) this.stuckNote.textContent = AntiStuck.status();
@@ -6629,6 +6630,7 @@ const UI = {
     this.status.textContent = `${World.charName || 'No character'} · ${World.inWorld() ? Controller.mode : World.phase}\nHP ${Math.round(me.hpPct)}% · MP ${Math.round(me.mpPct)}% · Potions ${Potion.count('hp')}/${Potion.count('mp')} · Pickups ${Stats.values.loot}\nHunting spot: ${Number.isFinite(distance) ? Math.round(distance / 10) + ' m away' : center ? 'another region' : 'not saved'}${Restock.recording ? '\nRecording route: ' + Restock.draft.route.length + ' points' : ''}`;
     if (Town.cfg().enabled) this.status.textContent += '\n' + Town.status();
     if (Reconnect.active() && Reconnect.message) this.status.textContent += '\n' + Reconnect.message;
+    this.status.title = this.status.textContent;
     this.refreshers.forEach(refresh => refresh());
     for (const slot of this.pane.querySelectorAll('.slot[data-skill]')) {
       const id = Number(slot.dataset.skill), left = World.cooldownLeft(id), total = World.skill(id)?.cooldownMs || 0;
