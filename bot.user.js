@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OpenSRO Bot
 // @namespace    http://127.0.0.1:5180/
-// @version      1.2.75
+// @version      1.2.76
 // @updateURL    https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @downloadURL  https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -21,7 +21,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OpenSRO Bot] Another SRO assistant is active. Disable it and reload to use OpenSRO Bot.');
   return;
 }
-const VERSION = '1.2.75';
+const VERSION = '1.2.76';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -367,8 +367,9 @@ function rotationKey(cls) {
   return cls === 'titan' ? 'unique' : cls;
 }
 
-function isFrostNovaIceField(id) {
-  return /frost\s*nova.*ice\s*field/i.test(World.skill(id)?.name || '');
+function isFrostNovaIceField(skill) {
+  const info = typeof skill === 'number' ? World.skill(skill) : skill;
+  return /frost\s*nova.*ice\s*field/i.test(info?.name || '');
 }
 
 function effectiveMaxHp(e) {
@@ -1002,7 +1003,7 @@ const Cmd = {
   canCast(id) {
     if (!id || !World.learned(id) || World.isDead()) return false;
     const info = World.skill(id);
-    if (info && info.groundTarget && !isFrostNovaIceField(id)) return false;
+    if ((info?.groundTarget || isFrostNovaIceField(id)) && !isFrostNovaIceField(id)) return false;
     return World.cooldownLeft(id) <= 0;
   },
 
@@ -1020,7 +1021,7 @@ const Cmd = {
     if (!this.canCast(id) || !this.spaced('skill')) return false;
     const info = World.skill(id);
     const cmd = { kind: 'skill', skillId: id };
-    if (info?.groundTarget) {
+    if (info?.groundTarget || isFrostNovaIceField(id)) {
       if (!isFrostNovaIceField(id)) return false;
       const gp = World.gp;
       const target = gid || gp?.target;
@@ -1241,7 +1242,7 @@ const Combat = {
 
   resolve(entry) {
     if (!entry) return 0;
-    if (isFrostNovaIceField(entry.id)) {
+    if (entry.iceField || isFrostNovaIceField(entry.id)) {
       const rows = World.groups.get(entry.group) || [];
       let best = 0, level = -Infinity;
       for (const row of rows) {
@@ -6285,23 +6286,23 @@ const UI = {
   learnedSkills(buff) {
     const best = new Map();
     for (const s of Learned.rows()) {
-      const iceField = isFrostNovaIceField(s.id);
-      if (s.missing || s.active === false || (s.groundTarget && !iceField) || (buff ? iceField || s.targetRequired : !iceField && (!s.targetRequired || (s.targets !== undefined && !(s.targets & 4))))) continue;
-      const group = s.group ?? s.id, previous = best.get(group);
-      if (!previous || (s.level ?? 0) > (previous.level ?? 0)) best.set(group, s);
+      const iceField = isFrostNovaIceField(s);
+      if (s.missing || (!iceField && s.active === false) || (s.groundTarget && !iceField) || (buff ? iceField || s.targetRequired : !iceField && (!s.targetRequired || (s.targets !== undefined && !(s.targets & 4))))) continue;
+      const group = s.group ?? s.id, key = (iceField ? 'ice-field:' : 'group:') + group, previous = best.get(key);
+      if (!previous || (s.level ?? 0) > (previous.level ?? 0)) best.set(key, s);
     }
     return [...best.values()];
   },
   skillList(parent, list, buff = false) {
     const strip = el('div', null, 'grid');
     list.forEach((entry, i) => {
-      const id = World.bestOfGroup(entry.group, entry.id) || entry.id;
+      const id = Combat.resolve(entry) || entry.id;
       strip.append(this.skillSlot(id, () => { list.splice(i, 1); Settings.saveProfile(); this.draw(); }, 'Remove ' + World.skillName(id), true, String(i + 1)));
     });
     parent.append(el('div', buff ? 'Active buffs — click a slot to remove' : 'Attack order — click a slot to remove', 'muted'), strip);
     if (!list.length) parent.append(el('div', buff ? 'No buffs selected. Choose from the icons below.' : 'No skills selected. Choose from the icons below.', 'empty'));
     list.forEach((entry, i) => {
-      const id = World.bestOfGroup(entry.group, entry.id) || entry.id;
+      const id = Combat.resolve(entry) || entry.id;
       const info = el('div', null, 'skill-info'); info.append(el('span', World.skillName(id), 'skill-name'), el('span', this.skillDetails(id), 'skill-detail'));
       const row = el('div', null, 'skill-row');
       const up = this.button('↑', () => { if (i > 0) { [list[i - 1], list[i]] = [list[i], list[i - 1]]; Settings.saveProfile(); this.draw(); } });
@@ -6318,11 +6319,13 @@ const UI = {
     const title = el('div', null, 'picker-title'); title.append(el('span', buff ? 'Learned self buffs' : 'Learned attack skills'), search);
     const grid = el('div', null, 'grid'); grid.setAttribute('aria-label', buff ? 'Buff skill icons' : 'Attack skill icons');
     for (const s of this.learnedSkills(buff)) {
-      const selected = list.some(entry => entry.group === (s.group ?? s.id));
+      const iceField = isFrostNovaIceField(s), group = s.group ?? s.id;
+      const sameSkill = entry => entry.group === group && (iceField ? entry.iceField || isFrostNovaIceField(entry.id) : !entry.iceField && !isFrostNovaIceField(entry.id));
+      const selected = list.some(sameSkill);
       const slot = this.skillSlot(s.id, () => {
-        const index = list.findIndex(entry => entry.group === (s.group ?? s.id));
+        const index = list.findIndex(sameSkill);
         if (index >= 0) list.splice(index, 1);
-        else list.push({ id: s.id, group: s.group ?? s.id, ...(buff ? { enabled: true, mode: 'hunt', refreshS: 3 } : {}) });
+        else list.push({ id: s.id, group, ...(iceField ? { iceField: true } : {}), ...(buff ? { enabled: true, mode: 'hunt', refreshS: 3 } : {}) });
         Settings.saveProfile(); this.draw();
       }, (selected ? 'Unselect ' : 'Add ') + World.skillName(s.id), selected);
       slot.dataset.search = ((s.name || '') + ' ' + s.level).toLowerCase(); grid.append(slot);
