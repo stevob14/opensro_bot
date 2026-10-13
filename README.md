@@ -11,11 +11,9 @@ the `@version` value increases.
 1. Review and edit `bot.user.js` in this repository.
 2. For each release, increase both the header `@version` and the `VERSION`
    constant, then review, commit, and push the change to `main`.
-3. Remove the older Tampermonkey entry, then install the current `bot.user.js`
-   from this repository once. The renamed script may appear as a separate
-   entry, and the older copy cannot learn the new update URL. After installing
-   this version, Tampermonkey can update it when a higher version is published.
-   Its update-check schedule is controlled by Tampermonkey settings.
+3. Since the script name, namespace, match rule, and update URL are unchanged,
+   Tampermonkey should update the existing entry when it next checks for
+   updates. Its update-check schedule is controlled by Tampermonkey settings.
 
 The repository is public, so anyone can read and copy the script and its
 history. Do not commit secrets or credentials. Do not put a GitHub token in the
@@ -25,8 +23,10 @@ userscript; the raw public URL needs no token.
 
 - The script is limited by its userscript match rule to
   `http://127.0.0.1:5180/*`, and uses `@grant none` in page context.
-- Game API requests go to the local game origin. The remote bug-report sender
-  and screenshot upload feature have been removed.
+- Game API requests go to the local game origin. Remote reporting, screenshot
+  upload, Discord links, and the upstream update checker are not included.
+- The script includes an optional local diagnostics summary; it copies to the
+  clipboard only when requested and does not upload data.
 - Automatic updates download only this repository's published script; no
   runtime update checker downloads or evaluates separate code.
 - This is a quick static review, not a guarantee of safety. Review changes
