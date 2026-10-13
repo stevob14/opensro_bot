@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OpenSRO Bot
 // @namespace    http://127.0.0.1:5180/
-// @version      1.2.74
+// @version      1.2.75
 // @updateURL    https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @downloadURL  https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -21,7 +21,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OpenSRO Bot] Another SRO assistant is active. Disable it and reload to use OpenSRO Bot.');
   return;
 }
-const VERSION = '1.2.74';
+const VERSION = '1.2.75';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -365,6 +365,10 @@ function monsterClass(e) {
 
 function rotationKey(cls) {
   return cls === 'titan' ? 'unique' : cls;
+}
+
+function isFrostNovaIceField(id) {
+  return /frost\s*nova.*ice\s*field/i.test(World.skill(id)?.name || '');
 }
 
 function effectiveMaxHp(e) {
@@ -998,15 +1002,33 @@ const Cmd = {
   canCast(id) {
     if (!id || !World.learned(id) || World.isDead()) return false;
     const info = World.skill(id);
-    if (info && info.groundTarget) return false;
+    if (info && info.groundTarget && !isFrostNovaIceField(id)) return false;
     return World.cooldownLeft(id) <= 0;
+  },
+
+  groundSkillQuery(position) {
+    if (!position || !Number.isInteger(position.regionId) || ![position.x, position.y, position.z].every(Number.isFinite)) return null;
+    const rayHeight = 400;
+    return {
+      originRegion: position.regionId,
+      ray: { start: [position.x, position.y + rayHeight, position.z], delta: [0, -rayHeight, 0] },
+      terrainDepth: null,
+    };
   },
 
   skill(id, gid) {
     if (!this.canCast(id) || !this.spaced('skill')) return false;
     const info = World.skill(id);
     const cmd = { kind: 'skill', skillId: id };
-    if (!info || info.targetRequired) {
+    if (info?.groundTarget) {
+      if (!isFrostNovaIceField(id)) return false;
+      const gp = World.gp;
+      const target = gid || gp?.target;
+      const e = target ? this.entity(target) : null;
+      if (!e || e.kind !== 'monster' || !World.isAlive(e)) return false;
+      cmd.query = this.groundSkillQuery(e);
+      if (!cmd.query) return false;
+    } else if (!info || info.targetRequired) {
       const gp = World.gp;
       const target = gid || gp?.target;
       if (!target) return false;
@@ -1219,6 +1241,17 @@ const Combat = {
 
   resolve(entry) {
     if (!entry) return 0;
+    if (isFrostNovaIceField(entry.id)) {
+      const rows = World.groups.get(entry.group) || [];
+      let best = 0, level = -Infinity;
+      for (const row of rows) {
+        if (isFrostNovaIceField(row.id) && World.learned(row.id) && (row.level ?? 0) > level) {
+          best = row.id;
+          level = row.level ?? 0;
+        }
+      }
+      return best || (World.learned(entry.id) ? entry.id : 0);
+    }
     return World.bestOfGroup(entry.group, entry.id);
   },
 
@@ -6228,7 +6261,7 @@ const UI = {
   skillTip(id, event) {
     const s = World.skill(id);
     if (!s || !this.tip) return;
-    this.tip.replaceChildren(el('strong', s.name || '#' + id), el('div', this.skillDetails(id)), el('div', s.targetRequired ? 'Target skill' : 'Self skill', 'muted'));
+    this.tip.replaceChildren(el('strong', s.name || '#' + id), el('div', this.skillDetails(id)), el('div', s.groundTarget ? 'Ground-target attack skill' : s.targetRequired ? 'Target skill' : 'Self skill', 'muted'));
     this.tip.hidden = false;
     const rect = event.currentTarget.getBoundingClientRect();
     this.tip.style.left = clamp(event.clientX || rect.left, 4, Math.max(4, innerWidth - 274)) + 'px';
@@ -6252,7 +6285,8 @@ const UI = {
   learnedSkills(buff) {
     const best = new Map();
     for (const s of Learned.rows()) {
-      if (s.missing || s.active === false || s.groundTarget || (buff ? s.targetRequired : !s.targetRequired || (s.targets !== undefined && !(s.targets & 4)))) continue;
+      const iceField = isFrostNovaIceField(s.id);
+      if (s.missing || s.active === false || (s.groundTarget && !iceField) || (buff ? iceField || s.targetRequired : !iceField && (!s.targetRequired || (s.targets !== undefined && !(s.targets & 4))))) continue;
       const group = s.group ?? s.id, previous = best.get(group);
       if (!previous || (s.level ?? 0) > (previous.level ?? 0)) best.set(group, s);
     }
