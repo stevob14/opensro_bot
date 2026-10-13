@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         OpenSRO Bot
 // @namespace    http://127.0.0.1:5180/
-// @version      1.2.78
+// @version      1.2.79
 // @updateURL    https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @downloadURL  https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
 // @author       Adapted from TSK's OpenSRO Assistant
-// @match        http://127.0.0.1:5180/*
+// @match        https://opensro.online/play*
 // @run-at       document-start
 // @grant        none
 // @sandbox      raw
@@ -21,7 +21,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OpenSRO Bot] Another SRO assistant is active. Disable it and reload to use OpenSRO Bot.');
   return;
 }
-const VERSION = '1.2.78';
+const VERSION = '1.2.79';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
