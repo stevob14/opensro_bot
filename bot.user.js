@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OpenSRO Bot
 // @namespace    http://127.0.0.1:5180/
-// @version      1.2.76
+// @version      1.2.77
 // @updateURL    https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @downloadURL  https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -21,7 +21,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OpenSRO Bot] Another SRO assistant is active. Disable it and reload to use OpenSRO Bot.');
   return;
 }
-const VERSION = '1.2.76';
+const VERSION = '1.2.77';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -4574,22 +4574,28 @@ const Learned = {
     return (World.gp?.skills || []).map(id => World.skill(id) || { id, group: id, name: 'Skill #' + id, missing: true });
   },
   async repair() {
-    if (this.pending || now() < this.retryAt || !this.rows().some(s => s.missing)) return;
+    if (this.pending || now() < this.retryAt || !this.rows().some(s => s.missing || !s.name || s.name === 'Skill #' + s.id)) return;
     this.retryAt = now() + 30000;
     this.pending = (async () => {
       const [data, names] = await Promise.all([Icons.request('/assets/data/skillData.json', 'json'), Icons.request('/assets/text/textdataname.en.json', 'json')]);
       const learned = new Set(World.gp?.skills || []), additions = [];
       for (const row of data.rows || []) {
         const m = row.split('\t'), id = Number(m[0]);
-        if (!learned.has(id) || World.skill(id)) continue;
+        if (!learned.has(id)) continue;
+        const current = World.skill(id);
+        if (current?.name) continue;
         // These are the projected columns published by buildSkillDataAsset.mjs.
         const group = Number(m[1]), sibling = World.groups.get(group)?.[0];
-        additions.push({ id, group, level: Number(m[2]), active: Number(m[3]) !== 0,
-          name: names.entries?.[m[19]] || 'Skill #' + id, icon: m[18], mp: Number(m[24]) || 0,
-          targetRequired: m[78] === undefined ? !!sibling?.targetRequired : Number(m[78]) !== 0,
-          cooldownMs: sibling?.cooldownMs || 0 });
+        additions.push({ ...current, id, group: current?.group ?? group, level: current?.level ?? Number(m[2]), active: current?.active ?? Number(m[3]) !== 0,
+          name: names.entries?.[m[19]] || current?.name || 'Skill #' + id, icon: current?.icon || m[18], mp: current?.mp ?? (Number(m[24]) || 0),
+          targetRequired: current?.targetRequired ?? (m[78] === undefined ? !!sibling?.targetRequired : Number(m[78]) !== 0),
+          cooldownMs: current?.cooldownMs ?? sibling?.cooldownMs ?? 0 });
       }
-      if (additions.length) World.rebuildCatalog([...World.catalog.values(), ...additions]);
+      if (additions.length) {
+        const merged = new Map(World.catalog);
+        for (const row of additions) merged.set(row.id, { ...merged.get(row.id), ...row });
+        World.rebuildCatalog([...merged.values()]);
+      }
     })().catch(e => Log.warn('Learned skill metadata: ' + e.message)).finally(() => { this.pending = null; });
     return this.pending;
   },
