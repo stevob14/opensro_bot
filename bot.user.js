@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         OpenSRO Bot
 // @namespace    http://127.0.0.1:5180/
-// @version      1.2.79
+// @version      1.2.80
 // @updateURL    https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @downloadURL  https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
 // @author       Adapted from TSK's OpenSRO Assistant
+// @match        http://127.0.0.1:5180/*
 // @match        https://opensro.online/play*
 // @run-at       document-start
 // @grant        none
@@ -21,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OpenSRO Bot] Another SRO assistant is active. Disable it and reload to use OpenSRO Bot.');
   return;
 }
-const VERSION = '1.2.79';
+const VERSION = '1.2.80';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -6197,6 +6198,28 @@ const UI = {
     b.addEventListener('click', () => { try { action(); } catch (e) { this.toast(e.message, 'warn'); } });
     return b;
   },
+  async importProfileFile(file) {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) return this.toast('Settings file is too large.', 'warn');
+    try {
+      const payload = JSON.parse(await file.text());
+      const hasUnsafeKey = (value) => {
+        if (!value || typeof value !== 'object') return false;
+        return Object.keys(value).some(key => ['__proto__', 'constructor', 'prototype'].includes(key) || hasUnsafeKey(value[key]));
+      };
+      if (payload?.app !== 'sro-bot-lean' || !payload.profile || typeof payload.profile !== 'object' || Array.isArray(payload.profile) || hasUnsafeKey(payload)) {
+        return this.toast('That is not a valid OpenSRO Bot settings export.', 'warn');
+      }
+      stopAll();
+      Settings.profile = botProfile(payload.profile);
+      Settings.saveProfile();
+      bus.emit('profile');
+      this.draw();
+      this.toast('Settings imported for ' + (World.charName || 'the default profile') + '.');
+    } catch (e) {
+      this.toast('Could not import settings: ' + e.message, 'warn');
+    }
+  },
   row(...nodes) { const r = el('div', null, 'row'); r.append(...nodes); return r; },
   field(title, input) { const label = el('label', null, 'field'); input.setAttribute('aria-label', title); label.append(el('span', title), input); return label; },
   check(title, get, set) {
@@ -6533,11 +6556,17 @@ const UI = {
         this.number('Maximum res distance from hunt spot (m)', () => party().resRadius / 10, v => party().resRadius = v * 10, 1, 100),
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Travel, shopping and manual control take priority.', 'muted')));
       AutoMastery.draw(this.pane);
-      this.pane.append(this.group('Profiles', el('p', 'Settings are saved separately for each character.', 'muted'),
+      const profileFile = el('input'); profileFile.type = 'file'; profileFile.accept = '.json,application/json'; profileFile.hidden = true;
+      profileFile.addEventListener('change', () => {
+        const file = profileFile.files?.[0];
+        if (file) void this.importProfileFile(file);
+        profileFile.value = '';
+      });
+      this.pane.append(this.group('Profiles', el('p', 'Settings are saved separately for each character. Export on the old game address, then import that file on opensro.online while logged into the same character.', 'muted'),
         this.button('Export OpenSRO Bot settings', () => {
           const url = URL.createObjectURL(new Blob([JSON.stringify({ app: 'sro-bot-lean', version: VERSION, profile: Settings.profile }, null, 2)], { type: 'application/json' }));
           const link = el('a'); link.href = url; link.download = 'opensro-bot-settings.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-        })));
+        }), this.button('Import OpenSRO Bot settings', () => profileFile.click()), profileFile));
       this.pane.append(this.group('Diagnostics', el('p', 'Copies a small local status summary. Nothing is uploaded.', 'muted'), this.button('Copy diagnostics', () => { void Diagnostics.copy(); })));
       this.logs = el('pre'); this.pane.append(this.group('Recent activity', this.logs));
     }
