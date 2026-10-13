@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OpenSRO Bot
 // @namespace    http://127.0.0.1:5180/
-// @version      1.2.81
+// @version      1.2.82
 // @updateURL    https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @downloadURL  https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OpenSRO Bot] Another SRO assistant is active. Disable it and reload to use OpenSRO Bot.');
   return;
 }
-const VERSION = '1.2.81';
+const VERSION = '1.2.82';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -6219,7 +6219,7 @@ const UI = {
         const profiles = Object.create(null);
         for (const [key, profile] of entries) profiles[key] = botProfile(profile);
         for (const [key, profile] of entries) {
-          if (!Store.set(key.slice('profile:'.length), profiles[key])) throw new Error('Browser storage rejected profile ' + key.slice(8) + '.');
+          if (!Store.set(key, profiles[key])) throw new Error('Browser storage rejected profile ' + key.slice('profile:'.length) + '.');
         }
         if (profiles[Settings.profileKey]) Settings.profile = profiles[Settings.profileKey];
         Store.set(Settings.profileKey, Settings.profile);
@@ -6589,8 +6589,7 @@ const UI = {
         }), this.button('Export all saved profiles', () => {
           const profiles = Object.create(null);
           for (const key of savedProfileKeys) {
-            const profileKey = key.slice('profile:'.length);
-            const stored = Store.get(profileKey, null);
+            const stored = Store.get(key, null);
             profiles[key] = key === Settings.profileKey || !stored ? Settings.profile : stored;
           }
           const url = URL.createObjectURL(new Blob([JSON.stringify({ app: 'sro-bot-lean', version: VERSION, profiles }, null, 2)], { type: 'application/json' }));
