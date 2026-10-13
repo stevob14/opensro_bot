@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OpenSRO Bot
 // @namespace    http://127.0.0.1:5180/
-// @version      1.2.80
+// @version      1.2.81
 // @updateURL    https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @downloadURL  https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OpenSRO Bot] Another SRO assistant is active. Disable it and reload to use OpenSRO Bot.');
   return;
 }
-const VERSION = '1.2.80';
+const VERSION = '1.2.81';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -6207,15 +6207,32 @@ const UI = {
         if (!value || typeof value !== 'object') return false;
         return Object.keys(value).some(key => ['__proto__', 'constructor', 'prototype'].includes(key) || hasUnsafeKey(value[key]));
       };
-      if (payload?.app !== 'sro-bot-lean' || !payload.profile || typeof payload.profile !== 'object' || Array.isArray(payload.profile) || hasUnsafeKey(payload)) {
+      if (payload?.app !== 'sro-bot-lean' || hasUnsafeKey(payload)) {
         return this.toast('That is not a valid OpenSRO Bot settings export.', 'warn');
       }
       stopAll();
-      Settings.profile = botProfile(payload.profile);
-      Settings.saveProfile();
+      if (payload.profiles && typeof payload.profiles === 'object' && !Array.isArray(payload.profiles)) {
+        const entries = Object.entries(payload.profiles);
+        if (!entries.length || entries.length > 100 || entries.some(([key, profile]) => !/^profile:.+/.test(key) || !profile || typeof profile !== 'object' || Array.isArray(profile))) {
+          return this.toast('The export does not contain valid character profiles.', 'warn');
+        }
+        const profiles = Object.create(null);
+        for (const [key, profile] of entries) profiles[key] = botProfile(profile);
+        for (const [key, profile] of entries) {
+          if (!Store.set(key.slice('profile:'.length), profiles[key])) throw new Error('Browser storage rejected profile ' + key.slice(8) + '.');
+        }
+        if (profiles[Settings.profileKey]) Settings.profile = profiles[Settings.profileKey];
+        Store.set(Settings.profileKey, Settings.profile);
+        this.toast('Imported ' + entries.length + ' saved character profile' + (entries.length === 1 ? '' : 's') + '.');
+      } else if (payload.profile && typeof payload.profile === 'object' && !Array.isArray(payload.profile)) {
+        Settings.profile = botProfile(payload.profile);
+        Settings.saveProfile();
+        this.toast('Settings imported for ' + (World.charName || 'the default profile') + '.');
+      } else {
+        return this.toast('That is not a valid OpenSRO Bot settings export.', 'warn');
+      }
       bus.emit('profile');
       this.draw();
-      this.toast('Settings imported for ' + (World.charName || 'the default profile') + '.');
     } catch (e) {
       this.toast('Could not import settings: ' + e.message, 'warn');
     }
@@ -6562,11 +6579,23 @@ const UI = {
         if (file) void this.importProfileFile(file);
         profileFile.value = '';
       });
-      this.pane.append(this.group('Profiles', el('p', 'Settings are saved separately for each character. Export on the old game address, then import that file on opensro.online while logged into the same character.', 'muted'),
+      const savedProfileKeys = [...new Set([...Store.keys().filter(key => key.startsWith('profile:')), Settings.profileKey])].sort();
+      const savedProfileNames = savedProfileKeys.map(key => key === 'profile:default' ? 'default' : key.slice('profile:'.length));
+      this.pane.append(this.group('Profiles', el('p', 'Saved on this address: ' + (savedProfileNames.join(', ') || 'none'), 'muted'),
+        el('p', 'Settings are saved separately by character and website address. Export all profiles on the old address, then import them on opensro.online. This works even if the game has not identified your character yet.', 'muted'),
         this.button('Export OpenSRO Bot settings', () => {
           const url = URL.createObjectURL(new Blob([JSON.stringify({ app: 'sro-bot-lean', version: VERSION, profile: Settings.profile }, null, 2)], { type: 'application/json' }));
           const link = el('a'); link.href = url; link.download = 'opensro-bot-settings.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }), this.button('Import OpenSRO Bot settings', () => profileFile.click()), profileFile));
+        }), this.button('Export all saved profiles', () => {
+          const profiles = Object.create(null);
+          for (const key of savedProfileKeys) {
+            const profileKey = key.slice('profile:'.length);
+            const stored = Store.get(profileKey, null);
+            profiles[key] = key === Settings.profileKey || !stored ? Settings.profile : stored;
+          }
+          const url = URL.createObjectURL(new Blob([JSON.stringify({ app: 'sro-bot-lean', version: VERSION, profiles }, null, 2)], { type: 'application/json' }));
+          const link = el('a'); link.href = url; link.download = 'opensro-bot-all-profiles.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }), this.button('Import settings or all profiles', () => profileFile.click()), profileFile));
       this.pane.append(this.group('Diagnostics', el('p', 'Copies a small local status summary. Nothing is uploaded.', 'muted'), this.button('Copy diagnostics', () => { void Diagnostics.copy(); })));
       this.logs = el('pre'); this.pane.append(this.group('Recent activity', this.logs));
     }
