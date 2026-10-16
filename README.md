@@ -22,11 +22,12 @@ userscript; the raw public URL needs no token.
 
 ## Security notes
 
-- The script is limited by its userscript match rule to
-  `https://opensro.online/play*`, and uses `@grant none` in page context.
-- Game API requests go to the page origin (`https://opensro.online`). Remote
-  reporting, screenshot upload, Discord links, and the upstream update checker
-  are not included.
+- The script is limited by its userscript match rules to
+  `http://127.0.0.1:5180/*` and `https://opensro.online/play*`, and uses
+  `@grant none` in page context.
+- Game API requests go to the local or page origin. Remote reporting,
+  screenshot upload, Discord links, and the upstream update checker are not
+  included.
 - The script includes an optional local diagnostics summary; it copies to the
   clipboard only when requested and does not upload data.
 - Automatic updates download only this repository's published script; no

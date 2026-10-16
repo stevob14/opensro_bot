@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         OpenSRO Bot
 // @namespace    http://127.0.0.1:5180/
-// @version      1.2.83
+// @version      1.2.102
 // @updateURL    https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @downloadURL  https://raw.githubusercontent.com/stevob14/opensro_bot/main/bot.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
 // @author       Adapted from TSK's OpenSRO Assistant
+// @license      MIT
 // @match        http://127.0.0.1:5180/*
 // @match        https://opensro.online/play*
 // @run-at       document-start
@@ -22,7 +23,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[OpenSRO Bot] Another SRO assistant is active. Disable it and reload to use OpenSRO Bot.');
   return;
 }
-const VERSION = '1.2.83';
+const VERSION = '1.2.102';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -182,11 +183,17 @@ const Store = {
   },
 };
 
+
 const CLASS_KEYS = ['normal', 'champion', 'giant', 'party', 'elite', 'unique'];
 const DEFAULT_PROFILE = {
-  alchemy: { target: 3, limit: 20, elixir: 0, powder: false },
-  mastery: { enabled: false, ids: [], gap: 0, skills: false, reserve: 0, order: 'masteries' },
-  party: { autoAcceptMatching: false, autoRecruit: false, autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true },
+  items: { rules: {} },
+  alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
+    // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
+    // Luck and lucky powder help at every plus, and Astral keeps +4 on a failure.
+    from: { powder: 0, luck: 0, steady: 5, immortal: 5, astral: 4 } },
+  mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
+  party: { autoAcceptMatching: false, autoRecruit: false, autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+    support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
@@ -201,12 +208,14 @@ const DEFAULT_PROFILE = {
     prefer: { hp: 0, mp: 0, vigor: 0, cure: 0 }, delayMs: 350,
     restock: {
       enabled: false, vendor: null, route: [], offers: [],
-      town: { enabled: false, revive: true, storeSox: true, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500, arrival: null, storage: null, vendor: null, smith: null, gate: null,
+      town: { enabled: false, revive: true, storeSox: true, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500,
+        broken: true, wear: { on: false, pct: 15 }, noXp: { on: false, minutes: 10 }, every: { on: false, minutes: 60 }, arrival: null, storage: null, vendor: null, smith: null, gate: null,
         keep: '', store: { equipment: true, elixirs: true, powders: true, alchemy: true, others: false } },
       hp: { on: true, refObjId: 0, low: 20, target: 100 },
       mp: { on: true, refObjId: 0, low: 20, target: 300 },
       cure: { on: false, refObjId: 58, low: 10, target: 50 },
       vigor: { on: false, refObjId: 22, low: 10, target: 50 },
+      ammo: { arrow: { on: false, low: 200, target: 2000 }, bolt: { on: false, low: 200, target: 2000 } },
     },
   },
   hunt: {
@@ -215,9 +224,11 @@ const DEFAULT_PROFILE = {
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
-      collector: 'character', petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
+      collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
     sit: { enabled: true, hpBelow: 35, mpBelow: 20, resumeAt: 90 },
     antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3 },
+    detour: { enabled: true, stallMs: 2500 },
+    trap: { enabled: true, seconds: 20, recall: false, diagnostics: false },
     onDeath: 'stop', stopNoHpPotion: false, stopInvFull: false,
     playerAlert: { enabled: false, radius: 250, pause: false }, manualPauseS: 6,
   },
@@ -226,7 +237,7 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'wardrobe', 'party', 'alchemy', 'mastery']) {
+  for (const key of ['macro', 'potion', 'hunt', 'wardrobe', 'party', 'alchemy', 'mastery', 'items']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -255,6 +266,11 @@ function botProfile(input) {
   // Magic and attribute stones used to sit in the alchemy switch, so they keep its setting.
   for (const key of ['magicStones', 'attrStones']) {
     if (pickup && !(key in pickup)) result.hunt.pickup[key] = pickup.alchemy ?? pickup.others ?? true;
+  }
+  // Helper stones used to be on when their count was above zero; now each has a switch and a count of at least 1.
+  const oldStones = input.alchemy?.stones;
+  if (oldStones && !input.alchemy?.use) for (const key of Object.keys(result.alchemy.use)) {
+    const n = Number(oldStones[key]) || 0; result.alchemy.use[key] = n > 0; result.alchemy.stones[key] = Math.min(6, Math.max(1, n));
   }
   return result;
 }
@@ -1396,6 +1412,7 @@ const Combat = {
     const sim = World.simNow() ?? 0;
     const lastHit = World.hitByUs.get(target.gid) ?? -Infinity;
     if (sim - lastHit > 2200 && now() - this.lastAttackAt > 1600) {
+      if (M.imbueBeforeAttack && this.imbue()) return;
       if (Cmd.attack(target.gid)) {
         this.lastAttackAt = now();
         this.noteFallback(skipped, this.rotation(cls).length);
@@ -1908,9 +1925,16 @@ const Navigation = {
     const t = n ? clamp(((p.x - a.x) * dx + (p.z - a.z) * dz) / n, 0, 1) : 0;
     return Math.hypot(p.x - a.x - t * dx, p.z - a.z - t * dz);
   },
-  clear(a, b) {
+  clear(a, b, departing = false) {
     const length = Math.hypot(b.x - a.x, b.z - a.z), steps = Math.max(1, Math.ceil(length / 8));
-    for (let i = 1; i <= steps; i++) if (!this.open(a.x + (b.x - a.x) * i / steps, a.z + (b.z - a.z) * i / steps)) return false;
+    let reachedOpen = this.open(a.x, a.z);
+    for (let i = 1; i <= steps; i++) {
+      const x = a.x + (b.x - a.x) * i / steps, z = a.z + (b.z - a.z) * i / steps;
+      if (!this.covered(x, z)) return false;
+      if (this.open(x, z)) reachedOpen = true;
+      else if (!departing || reachedOpen) return false;
+    }
+    if (!reachedOpen) return false;
     const minX = Math.floor((Math.min(a.x, b.x) - 2) / 80), maxX = Math.floor((Math.max(a.x, b.x) + 2) / 80);
     const minZ = Math.floor((Math.min(a.z, b.z) - 2) / 80), maxZ = Math.floor((Math.max(a.z, b.z) + 2) / 80);
     const cross = (p, q, r) => (q.x - p.x) * (r.z - p.z) - (q.z - p.z) * (r.x - p.x);
@@ -1927,7 +1951,7 @@ const Navigation = {
     }
     return true;
   },
-  plan(from, to, arrivalRadius = 0) {
+  plan(from, to, arrivalRadius = 0, options = {}) {
     if (!this.scene || (from.regionId | to.regionId) & DUNGEON) return null;
     const start = this.local(from), goal = this.local(to);
     if (!start || !goal || !this.open(start.x, start.z)) return null;
@@ -1943,7 +1967,8 @@ const Navigation = {
       return top;
     };
     push(first); let best = first, reached = false;
-    for (let n = 0; heap.length && n < 60000; n++) {
+    let visited = 0;
+    for (; heap.length && visited < (options.maxNodes ?? 60000); visited++) {
       const p = pop(), k = key(p); if (closed.has(k)) continue; closed.add(k);
       if (h(p) < h(best)) best = p;
       const a = p === first ? start : center(p);
@@ -1956,6 +1981,7 @@ const Navigation = {
         q.f = q.g + h(q); scores.set(qk, q.g); push(q);
       }
     }
+    if (options.result) { options.result.limited = !reached && heap.length > 0; options.result.visited = visited; }
     const goalCovered = this.scene.grids.has(Math.floor(goal.x / SECTOR) + ',' + Math.floor(goal.z / SECTOR));
     if (!reached && (goalCovered || h(first) - h(best) < 2)) return [];
     const path = []; for (let p = best; p && p !== first; p = p.parent) path.push(center(p)); path.reverse();
@@ -1963,7 +1989,7 @@ const Navigation = {
     // Smooth only segments whose terrain and object collision checks both pass.
     const result = []; let anchor = start;
     for (let i = 0; i < path.length;) {
-      let j = i; while (j + 1 < path.length && Math.hypot(path[j + 1].x - anchor.x, path[j + 1].z - anchor.z) < 600 && this.clear(anchor, path[j + 1])) j++;
+      let j = i; while (j + 1 < path.length && Math.hypot(path[j + 1].x - anchor.x, path[j + 1].z - anchor.z) < (options.maxChord ?? 600) && this.clear(anchor, path[j + 1])) j++;
       result.push(this.pose(path[j], from.y)); anchor = path[j]; i = j + 1;
     }
     return result;
@@ -1986,6 +2012,163 @@ const Navigation = {
   },
 };
 Hook.observers.push(command => Navigation.capture(command));
+
+
+/*
+===========================================================================
+lean-pursuit-navigation.js - bounded, explicit pursuit and escape queries
+
+Uses admitted game collision products. A query never changes a player pose;
+the native movement command and its observed result remain authoritative.
+===========================================================================
+*/
+const PURSUIT_NAV = { nodes: 6000, chord: 120, step: 60, arrive: 7, candidates: 4 };
+
+/*
+================
+Navigation.covered
+================
+*/
+Navigation.covered = function( x, z ) {
+	return !!this.scene?.grids.has( Math.floor( x / SECTOR ) + "," + Math.floor( z / SECTOR ) );
+};
+
+/*
+================
+Navigation.pointStatus
+
+Terrain openness alone is not object clearance. Closed object interiors still
+require a reachable chord; this query deliberately makes no ownership claim.
+================
+*/
+Navigation.pointStatus = function( pose ) {
+	if ( !pose || !this.scene || pose.regionId & DUNGEON ) return "unknown";
+	const p = this.local( pose );
+	if ( !p || !this.covered( p.x, p.z ) ) return "unknown";
+	return this.open( p.x, p.z ) && this.clear( p, p ) ? "open" : "blocked";
+};
+
+/*
+================
+Navigation.setClipQuery
+
+Optional synchronous, read-only client adapter. A missing/unknown reply never
+authorizes movement. The default implementation uses the existing bundle.
+================
+*/
+Navigation.setClipQuery = function( query = null ) {
+	if ( query !== null && typeof query !== "function" ) throw Error( "Invalid clip query" );
+	this.clipQuery = query;
+};
+
+/*
+================
+Navigation.segment
+================
+*/
+Navigation.segment = function( from, to, departing = false ) {
+	if ( !from || !to || !Number.isFinite( dist2D( from, to ) ) ) return false;
+	// This product describes X/Z traversal, not terrain slope. Native movement
+	// resolves height; a destination's different Y is not evidence of a wall.
+	if ( this.pointStatus( to ) !== "open" ) return false;
+	const a = this.local( from ), b = this.local( to );
+	if ( !a || !b || !this.clear( a, b, departing ) ) return false;
+	if ( !this.clipQuery ) return true;
+	try {
+		const clipped = this.clipQuery( {
+			from: { ...from },
+			to: { ...to },
+			epoch: World.epoch,
+			revision: this.revision
+		} );
+		return !!clipped && clipped.epoch === World.epoch && clipped.revision === this.revision &&
+			Number.isFinite( clipped.pose?.y ) && Math.abs( clipped.pose.y - (to.y ?? 0) ) <= 2 &&
+			dist2D( clipped.pose, to ) <= 2;
+	} catch {
+		return false;
+	}
+};
+
+/*
+================
+Navigation.query
+
+The legacy plan/next interface stays intact for town and recorded routes.
+Pursuit must distinguish an unavailable map from a proven failed search.
+================
+*/
+Navigation.query = function( from, to, maxNodes = PURSUIT_NAV.nodes ) {
+	const start = this.pointStatus( from ), end = this.pointStatus( to );
+	if ( start === "unknown" || end === "unknown" ) return { status: "unknown", route: [] };
+	if ( start === "blocked" ) return { status: "invalid-start", route: [] };
+	if ( this.segment( from, to ) ) return { status: "direct", route: [ to ] };
+	const result = {};
+	const route = this.plan( from, to, 0, { maxNodes, maxChord: PURSUIT_NAV.chord, result } );
+	if ( !route?.length ) {
+		return { status: result.limited ? "search-limit" : "unreachable", route: [], visited: result.visited };
+	}
+	let previous = from;
+	for ( const point of route ) {
+		if ( !this.segment( previous, point ) ) return { status: "unreachable", route: [], visited: result.visited };
+		previous = point;
+	}
+	return { status: "route", route, visited: result.visited };
+};
+
+/*
+================
+Navigation.attackRoute
+
+Only consider nearby stand-off goals when their final approach is clear.
+Walking obstruction is never treated as projectile line-of-sight.
+================
+*/
+Navigation.attackRoute = function( from, target, radius, failed = [] ) {
+	const direct = this.query( from, target );
+	if ( ![ "route", "unreachable" ].includes( direct.status ) || radius <= PURSUIT_NAV.arrive ) return direct;
+	const delta = regionDelta( target, from );
+	if ( !delta ) return direct;
+	const angle = Math.atan2( delta[1], delta[0] ), local = this.local( target );
+	let budget = PURSUIT_NAV.nodes - (direct.visited || 0);
+	for ( let i = 0; i < PURSUIT_NAV.candidates && budget > 0; i++ ) {
+		const theta = angle + [ 0, Math.PI / 2, -Math.PI / 2, Math.PI ][i];
+		const goal = this.pose(
+			{ x: local.x + Math.cos( theta ) * radius, z: local.z + Math.sin( theta ) * radius },
+			from.y
+		);
+		if ( failed.some( p => dist2D( p, goal ) < PURSUIT_NAV.step ) || !this.segment( goal, target ) ) continue;
+		const route = this.query( from, goal, budget );
+		budget -= route.visited || 0;
+		// A direct leg to a stand-off goal still needs explicit movement.
+		if ( route.status === "route" || route.status === "direct" ) return { ...route, status: "route" };
+	}
+	return direct;
+};
+
+/*
+================
+Navigation.escapeCandidates
+
+Never cross object walls to get out of a blocked terrain start. Native terrain
+departure permits a contiguous blocked prefix, but not reentry or missing data.
+================
+*/
+Navigation.escapeCandidates = function( from ) {
+	if ( !this.scene || !from || from.regionId & DUNGEON ) return [];
+	const p = this.local( from ), out = [];
+	for ( const radius of [ 20, 40, 80, 120 ] ) {
+		for ( let i = 0; i < 8; i++ ) {
+			const theta = i * Math.PI / 4;
+			const to = this.pose(
+				{ x: p.x + Math.cos( theta ) * radius, z: p.z + Math.sin( theta ) * radius },
+				from.y
+			);
+			if ( this.segment( from, to, true ) ) out.push( to );
+		}
+		if ( out.length >= PURSUIT_NAV.candidates ) break;
+	}
+	return out.sort( ( a, b ) => dist2D( from, a ) - dist2D( from, b ) ).slice( 0, PURSUIT_NAV.candidates );
+};
 
 
 // Independent return command using the saved hunt centre and native movement.
@@ -2084,7 +2267,11 @@ const Loot = {
     }
     return null;
   },
-  petMode() { return Hunt.cfg().pickup.collector === 'pet'; },
+  // Who collects a kind of drop: its own choice (pickup.by), else the default collector. A pet is in use when it is the
+  // default or when any wanted kind is given to it; the character can collect other kinds meanwhile.
+  collectorFor(category) { const P = Hunt.cfg().pickup, by = P.by?.[category]; return by === 'pet' || by === 'character' ? by : P.collector === 'pet' ? 'pet' : 'character'; },
+  collector(e) { return this.collectorFor(this.category(e.groundItem?.typeFlags ?? e.tidWord ?? 0)); },
+  petMode() { const P = Hunt.cfg().pickup; return P.collector === 'pet' || this.categories.some(k => P[k] && P.by?.[k] === 'pet'); },
   preparePet() {
     if (!this.petMode() || !Hunt.cfg().pickup.enabled || World.isDead()) return false;
     const pet = this.pet();
@@ -2143,7 +2330,7 @@ const Loot = {
     Settings.saveProfile();
   },
   count(ref, petGid = 0) { return this.items(petGid).filter(i => i.refObjId === ref).reduce((n, i) => n + (i.quantity ?? 1), 0); },
-  bagSignature() { const pet = this.petMode() && this.pet(); return `${pet ? pet.rec.gid : 0}:` + this.items(pet ? pet.rec.gid : 0).map(i => `${i.slot}:${i.refObjId}:${i.quantity ?? 1}`).join('|'); },
+  bagSignature(e) { const pet = (e ? this.collector(e) === 'pet' : this.petMode()) && this.pet(); return `${pet ? pet.rec.gid : 0}:` + this.items(pet ? pet.rec.gid : 0).map(i => `${i.slot}:${i.refObjId}:${i.quantity ?? 1}`).join('|'); },
   owned(e) {
     const gi = e.groundItem;
     if (!gi) return false;
@@ -2166,14 +2353,19 @@ const Loot = {
     if (!e || e.kind !== 'ground-item' || !this.owned(e)) return false;
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0;
     const name = (e.name || '').toLowerCase();
-    if (splitList(P.exclude).some(s => name.includes(s))) return false;
-    const included = splitList(P.include).some(s => name.includes(s));
+    // An item rule decides first: never (or drop) skips it, always skips the category and name filters.
+    const rule = ItemRules.get(e.refObjId);
+    if (rule && (rule.pick === 'no' || rule.act === 'drop')) return false;
     const gold = ItemType.isGold(tf);
-    // SoX-only narrows equipment to Star/Moon/Sun gear; every other category keeps its own switch.
-    if (P.soxOnly && ItemType.isEquipment(tf)) { if (!this.sox(e)) return false; }
-    else if (!included && !P[this.category(tf)]) return false;
-    const pet = this.petMode() ? this.pet() : null;
-    if (this.petMode() && (!pet || !Number.isInteger(pet.rec.commandMode) || (pet.rec.commandMode & 128) || dist2D(pet.ent, e) > 500)) return false;
+    if (rule?.pick !== 'yes') {
+      if (splitList(P.exclude).some(s => name.includes(s))) return false;
+      const included = splitList(P.include).some(s => name.includes(s));
+      // SoX-only narrows equipment to Star/Moon/Sun gear; every other category keeps its own switch.
+      if (P.soxOnly && ItemType.isEquipment(tf)) { if (!this.sox(e)) return false; }
+      else if (!included && !P[this.category(tf)]) return false;
+    }
+    const byPet = this.collector(e) === 'pet', pet = byPet ? this.pet() : null;
+    if (byPet && (!pet || !Number.isInteger(pet.rec.commandMode) || (pet.rec.commandMode & 128) || dist2D(pet.ent, e) > 500)) return false;
     if (gold || (pet ? pet.rec.status > pet.rec.inventory.length : World.freeBagSlots() > 0)) return true;
     // Ground drops omit quantity/stack ceiling. Permit an existing stack to merge;
     // a server capacity refusal suppresses this drop until inventory changes.
@@ -2184,54 +2376,67 @@ const Loot = {
   // The first reason a drop in view is not collected, or '' when it is eligible. Follows choose() and allowed().
   whyNot(e) {
     const H = Hunt.cfg(), P = H.pickup, skip = this.skips.get(e.gid);
-    if (skip && (skip.bag !== null ? skip.bag === this.bagSignature() : skip.until > now())) return 'failed';
+    if (skip && (skip.bag !== null ? skip.bag === this.bagSignature(e) : skip.until > now())) return 'failed';
     if (!(dist2D(World.pose(), e) <= P.radius)) return 'far';
     if (H.center && dist2D(H.center, e) > H.radius + P.radius) return 'area';
     if (!this.owned(e)) return 'owner';
-    const tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase();
+    const tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase(), rule = ItemRules.get(e.refObjId);
+    if (rule && (rule.pick === 'no' || rule.act === 'drop')) return 'rule';
     const included = splitList(P.include).some(s => name.includes(s));
-    const filtered = splitList(P.exclude).some(s => name.includes(s)) ||
-      (P.soxOnly && ItemType.isEquipment(tf) ? !this.sox(e) : !included && !P[this.category(tf)]);
+    const filtered = rule?.pick !== 'yes' && (splitList(P.exclude).some(s => name.includes(s)) ||
+      (P.soxOnly && ItemType.isEquipment(tf) ? !this.sox(e) : !included && !P[this.category(tf)]));
     if (filtered) return 'filter';
-    if (this.petMode()) {
+    if (this.collector(e) === 'pet') {
       const pet = this.pet();
       if (!pet || !Number.isInteger(pet.rec.commandMode) || (pet.rec.commandMode & 128)) return 'pet';
       if (dist2D(pet.ent, e) > 500) return 'petFar';
     }
     return this.allowed(e) ? '' : 'full';
   },
+  // Which switch kept a drop out, for the status line: 'name' (excluded name), 'sox' (SoX only) or its item kind.
+  filterWhy(e) {
+    const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase();
+    if (splitList(P.exclude).some(s => name.includes(s))) return 'name';
+    return P.soxOnly && ItemType.isEquipment(tf) ? 'sox' : this.category(tf);
+  },
+  filterLabel(key) {
+    return { name: 'excluded by name', sox: 'not Star/Moon/Sun gear (SoX only)', gold: 'gold', potions: 'potions', equipment: 'equipment', elixirs: 'elixirs',
+      powders: 'lucky powders', magicStones: 'magic stones', attrStones: 'attribute stones', alchemy: 'other alchemy items', others: 'other items' }[key] || key;
+  },
   skip(e, reason, inventoryBound = false) {
     const n = Math.min(6, (this.failureCounts.get(e.gid) || 0) + 1);
     this.failureCounts.set(e.gid, n);
-    this.skips.set(e.gid, { until: now() + Math.min(60000, 5000 * 2 ** (n - 1)), bag: inventoryBound ? this.bagSignature() : null });
+    this.skips.set(e.gid, { until: now() + Math.min(60000, 5000 * 2 ** (n - 1)), bag: inventoryBound ? this.bagSignature(e) : null });
     Log.warn(`Loot skipped (${e.name || e.gid}): ${reason}`);
     this.active = null;
     Hunt.lootGid = 0;
   },
-  choose() {
+  // The nearest drop worth taking; `by` ('pet' or 'character') limits it to that collector's drops.
+  choose(by = null) {
     const H = Hunt.cfg(), P = H.pickup, pose = World.pose();
     if (!P.enabled || !pose) return null;
-    const origin = this.petMode() ? this.pet()?.ent : pose;
-    if (!origin) return null;
     let chosen = null, best = Infinity;
     for (const e of World.ents.values()) {
       if (e.kind !== 'ground-item') continue;
       const skip = this.skips.get(e.gid);
       if (skip) {
-        if (skip.bag !== null ? skip.bag === this.bagSignature() : skip.until > now()) continue;
+        if (skip.bag !== null ? skip.bag === this.bagSignature(e) : skip.until > now()) continue;
         this.skips.delete(e.gid);
       }
       const d = dist2D(pose, e);
       if (!Number.isFinite(d) || d > P.radius || H.center && dist2D(H.center, e) > H.radius + P.radius || !this.allowed(e)) continue;
-      const travel = dist2D(origin, e);
+      const who = this.collector(e);
+      if (by && who !== by) continue;
+      const travel = dist2D(who === 'pet' ? this.pet()?.ent : pose, e);
       if (travel < best) { chosen = e; best = travel; }
     }
     return chosen;
   },
   begin(e) {
-    if (!this.allowed(e) || World.gp?.inventoryPending || !this.petMode() && World.isCasting()) return false;
-    const petGid = this.petMode() ? this.pet()?.rec.gid : 0;
-    if (this.petMode() && (!petGid || this.pressed()) || !this.pickup(e.gid, petGid)) return false;
+    const byPet = this.collector(e) === 'pet';
+    if (!this.allowed(e) || World.gp?.inventoryPending || !byPet && World.isCasting()) return false;
+    const petGid = byPet ? this.pet()?.rec.gid : 0;
+    if (byPet && (!petGid || this.pressed()) || !this.pickup(e.gid, petGid)) return false;
     const gold = ItemType.isGold(e.groundItem.typeFlags);
     this.active = { gid: e.gid, ref: e.refObjId, name: e.name, gold, petGid,
       before: gold ? toBigInt(World.gp?.progression?.gold) : this.count(e.refObjId, petGid),
@@ -2246,9 +2451,9 @@ const Loot = {
   tick() {
     const a = this.active;
     if (!a) return false;
-    if (!!a.petGid !== this.petMode() || a.petGid && this.pet()?.rec.gid !== a.petGid) { this.suspend(); return false; }
-    if (!a.petGid) Hunt.state = 'loot';
     const e = World.ents.get(a.gid);
+    if (!!a.petGid !== (e ? this.collector(e) === 'pet' : !!a.petGid) || a.petGid && this.pet()?.rec.gid !== a.petGid) { this.suspend(); return false; }
+    if (!a.petGid) Hunt.state = 'loot';
     if (this.gained(a)) {
       Stats.pickup(a);
       // If inventory updates precede despawn, don't request this same drop again.
@@ -2533,14 +2738,25 @@ const Party = {
   // "On death" setting did. A revive the player or the bot does itself never resumes anything.
   huntAtDeath: null, resumeHunt: null, consentAt: -Infinity, aliveSince: 0,
   noteDeath() { if (Hunt.running && !this.huntAtDeath) this.huntAtDeath = { at: now() }; },
-  // Another online party member who is up and in view might resurrect us.
+  // Another party member who is alive (status & 15 is their health in tenths, 0 when dead) and in view might resurrect us.
   helperNearby() {
     const social = World.gp?.social;
-    return !!social?.members?.some(m => m && m.name && m.name !== social.localName && (m.status & 15) === 0 &&
+    return !!social?.members?.some(m => m && m.name && m.name !== social.localName && (m.status & 15) !== 0 &&
       [...World.ents.values()].some(e => e.kind === 'player' && e.name === m.name && e.appearanceState?.[0] !== 2));
   },
-  // With Accept resurrection on and a helper at hand, wait longer before the bot revives itself.
-  reviveDelay() { return Settings.profile.party.acceptRes && this.helperNearby() ? 20000 : 5000; },
+  helperSeenAt: -Infinity,
+  // With Accept resurrection on and a helper at hand, wait longer before the bot revives itself. A helper seen in the
+  // last 15 seconds still counts, so a moment out of view or a death far from the party does not cut the wait short.
+  helping() {
+    if (this.helperNearby()) this.helperSeenAt = now();
+    return now() - this.helperSeenAt < 15000;
+  },
+  reviveDelay() { return Settings.profile.party.acceptRes && this.helping() ? 20000 : 5000; },
+  // One plain sentence for the log when the character dies.
+  waitNote() {
+    if (!Settings.profile.party.acceptRes) return 'reviving in 5 s (Accept resurrection from party members is off).';
+    return this.reviveDelay() === 20000 ? 'waiting 20 s for a party member to resurrect before reviving.' : 'no party member in view, reviving in 5 s.';
+  },
   // Never revive while an offer is open or an acceptance was just sent.
   resBusy() { return !!World.gp?.social?.resurrection || now() - this.consentAt < 4000; },
   resumeTick() {
@@ -2575,6 +2791,7 @@ const Party = {
   },
   tick() {
     this.acceptResurrection();
+    if (World.inWorld() && Settings.profile.party.acceptRes) this.helping();
     const c = Settings.profile.party;
     if (!World.inWorld() || (!c.autoAcceptMatching && !c.autoRecruit)) return;
     const gp = World.gp, matching = gp?.partyMatching, request = matching?.request, social = gp?.social;
@@ -2822,6 +3039,9 @@ const TOWN_TABLE = [{"key":"EU","name":"Constantinople","services":{"storage":{"
 // Native reverse scrolls are spent by travel-gate type 5/choice 2, not item-use.
 const Town = {
   trip: null, lastScrollPoint: null, message: 'Town cycle off.',
+  // Clocks for the "no XP for N minutes" and "every N minutes" triggers. They run only while hunting, alive and in
+  // the world, and restart when a trip begins or completes, so a long trip never triggers the next one.
+  xpKey: '', lastXpAt: 0, cycleFrom: 0,
   history: [], lastTrace: '',
   blocked() {
     if (!this.cfg().enabled) return 'town cycle is off';
@@ -2885,9 +3105,17 @@ const Town = {
   },
   cfg() { return Restock.cfg().town; },
   // Native X-Large HP/MP IDs 8/15, both authored with 50 potions per stack.
+  // Arrows and bolts (item 62 and 10376 on this server) are sold by the weapon merchant, so they are bought there,
+  // after selling and before repairing. They count in the bag and in the equipped ammunition slot together.
+  ammoSupplies() {
+    const a = Restock.cfg().ammo;
+    return [['arrow', 62], ['bolt', 10376]].filter(([kind]) => a?.[kind]?.on).map(([kind, refObjId]) => ({ kind, refObjId, low: a[kind].low, target: a[kind].target }));
+  },
+  ammoCount(ref) { return (World.gp?.inventory || []).filter(i => i.refObjId === ref).reduce((n, i) => n + (i.quantity ?? 1), 0); },
   supplies() { return Restock.supplies().map(s => ({ ...s, refObjId: s.kind === 'hp' ? 8 : s.kind === 'mp' ? 15 : s.refObjId })); },
   status() {
-    if (this.trip || this.message.startsWith('Town cycle stopped:')) return this.message;
+    if (this.trip) return this.message + (this.trip.why ? ` (reason: ${this.trip.why})` : '');
+    if (this.message.startsWith('Town cycle stopped:')) return this.message;
     if (!this.cfg().enabled) return 'Town cycle off. The pet-full chime is an alert; enable the scroll town cycle to return automatically.';
     if (!World.inWorld()) return 'Town cycle: waiting for game world.';
     const blocked = this.blocked();
@@ -3017,7 +3245,16 @@ const Town = {
   // the player relies on stays put: names in Keep, a saved buff set's weapon or shield, and the weapon picked for
   // alchemy (checked by bag slot, so only for items from the character bag).
   depositItem(item, fromBag = false) {
-    const c = this.cfg();
+    const c = this.cfg(), act = ItemRules.get(item.refObjId)?.act;
+    // An item rule decides first. Store: any kind of item, except from the bag what the trip itself needs
+    // (potions, pills, return/reverse/speed scrolls, the supplies it buys). Sell, keep or drop: never deposited.
+    if (act && act !== 'store') return false;
+    if (act === 'store') {
+      if (fromBag && this.needed(item)) return false;
+      const key = BuffGear.key(item);
+      if (BuffGear.cfg().buffSets.some(s => s.weapon === key || s.shield === key)) return false;
+      return !(fromBag && Alchemy.selected && Alchemy.selected.slot === item.slot);
+    }
     if (!Number.isInteger(item.typeFlags) || !ItemType.isEquipment(item.typeFlags)) return false;
     const level = this.requiredLevel(item);
     if (!(c.storeSox && Items.soxOf(item) > 0) && !(level !== null && this.levelRanges().some(([a, b]) => level >= a && level <= b))) return false;
@@ -3029,17 +3266,61 @@ const Town = {
   // Loot kept in the warehouse instead of being sold. Stones are also deposited from the character bag; elixirs are
   // not, because alchemy takes them from there.
   kept: ['elixirs', 'magicStones', 'attrStones'],
-  stone(item) { return this.disposable(item) && ['magicStones', 'attrStones'].includes(Loot.category(item.typeFlags)); },
-  eligible(item) { return this.depositItem(item) || this.disposable(item) && this.kept.includes(Loot.category(item.typeFlags)); },
-  sellable(item) { return this.disposable(item) && !this.kept.includes(Loot.category(item.typeFlags)); },
+  // Supplies the town trip needs and buys, kept in the bag whatever the rules say.
+  needed(item) {
+    const tf = item.typeFlags;
+    return !Number.isInteger(tf) || ItemType.isPotion(tf) || ItemType.isCure(tf) || (tf & 0x7fc) === 0x1ec || item.refObjId === 24198 ||
+      Restock.supplies().some(s => s.refObjId === item.refObjId);
+  },
+  ruled(item) { const act = ItemRules.get(item.refObjId)?.act; return act && act !== 'store' ? act : ''; },
+  stone(item) { return !this.ruled(item) && this.disposable(item) && ['magicStones', 'attrStones'].includes(Loot.category(item.typeFlags)); },
+  eligible(item) { return !this.ruled(item) && (this.depositItem(item) || this.disposable(item) && this.kept.includes(Loot.category(item.typeFlags))); },
+  // Pet loot only (the character bag is never sold). A Sell rule sells it; keep, store and drop rules never do.
+  sellable(item) {
+    const act = ItemRules.get(item.refObjId)?.act;
+    if (act) return act === 'sell';
+    return this.disposable(item) && !this.kept.includes(Loot.category(item.typeFlags));
+  },
   autoRevive() { return this.cfg().enabled && this.cfg().revive; },
   reason() {
     const c = this.cfg(), pet = Loot.pet();
     if (World.freeBagSlots() <= 1) return 'character bag nearly full';
     if (c.petFull && pet && pet.rec.status - pet.rec.inventory.length <= c.petFree) return 'pickup pet nearly full';
     if (this.supplies().some(s => Restock.count(s.refObjId) <= s.low)) return 'potions running low';
+    if (this.ammoSupplies().some(s => this.ammoCount(s.refObjId) <= s.low)) return 'ammunition running low';
+    if (c.broken && this.weaponBroken()) return 'weapon broken';
+    const worn = c.wear?.on ? this.wear() : null;
+    if (worn && worn.pct < c.wear.pct) return `gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`;
+    if (c.noXp?.on && this.lastXpAt && now() - this.lastXpAt >= c.noXp.minutes * 60000) return `no XP for ${c.noXp.minutes} minutes`;
+    if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
   },
+  // The equipped weapon (slot 6) at zero durability.
+  weaponBroken() {
+    const w = (World.gp?.inventory || []).find(i => i.slot === 6);
+    return !!w && ItemType.isEquipment(w.typeFlags) && w.durability === 0;
+  },
+  // The most worn repairable equipped item, as a percentage of its own maximum. Items whose maximum is unknown
+  // (no tooltip yet) are left out rather than guessed.
+  wear() {
+    let low = null;
+    const equipped = World.gp?.equipmentSlotCount || 13;
+    for (const i of World.gp?.inventory || []) {
+      if (i.slot >= equipped || !ItemType.isEquipment(i.typeFlags) || !Number.isFinite(i.durability) || !i.tooltip?.fields?.canRepair) continue;
+      const max = this.maximum(i);
+      if (!max) continue;
+      const pct = i.durability / max * 100;
+      if (!low || pct < low.pct) low = { pct, name: i.name || Items.name?.(i.refObjId) || 'gear' };
+    }
+    return low;
+  },
+  watch() {
+    if (!Hunt.running || !World.inWorld() || World.isDead()) { this.lastXpAt = this.cycleFrom = 0; this.xpKey = ''; return; }
+    const p = World.gp?.progression, key = `${p?.level}:${p?.experience}`;
+    if (!this.cycleFrom) { this.restartClocks(); this.xpKey = key; return; }
+    if (key !== this.xpKey) { this.xpKey = key; this.lastXpAt = now(); }
+  },
+  restartClocks() { this.lastXpAt = this.cycleFrom = now(); },
   validate() {
     const c = this.cfg(), supplies = this.supplies();
     const missing = [['arrival', 'arrival point'], ['vendor', 'potion merchant'], ['smith', 'repair merchant'], ['gate', 'world statue / teleport'], ...(c.petFull ? [['storage', 'warehouse']] : [])].filter(([key]) => !c[key]).map(([, label]) => label);
@@ -3074,7 +3355,12 @@ const Town = {
     if (revival) Hunt.running = true;
     Restock.trip = null;
     Resurrect.cancelTrip('', true); Resurrect.holdUntil = 0; Loot.suspend();
-    this.trip = { phase: 'recall', at: now(), started: now(), origin: { ...origin }, revival,
+    this.restartClocks();
+    // Say why, once: the trigger is only visible before departure, and people ask why the bot went to town.
+    const why = revival ? 'returning after a death' : this.reason() || 'started by you';
+    this.lastTrip = { why, at: now() };
+    Log.info('Town trip started: ' + why + '.');
+    this.trip = { phase: 'recall', at: now(), started: now(), origin: { ...origin }, revival, why,
       huntArea: revival && Hunt.cfg().center ? { center: { ...Hunt.cfg().center }, radius: Hunt.cfg().radius } : null,
       manualAt: Manual.lastAt, character: World.charName, petRef: Loot.pet()?.rec.refObjId,
       config: JSON.stringify(this.cfg()), supplies: this.supplies() };
@@ -3214,7 +3500,7 @@ const Town = {
     const item = pet?.rec.inventory.find(i => this.sellable(i));
     if (!item) {
       if (this.cfg().petFull && pet && pet.rec.status - pet.rec.inventory.length <= this.cfg().petFree) return this.fail('Protected pet items still fill the bag.');
-      this.enter('repair'); return;
+      this.enter(this.ammoSupplies().length ? 'ammo' : 'repair'); return;
     }
     const quantity = item.quantity ?? 1;
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 65535) return this.fail('Invalid pet item sale quantity.');
@@ -3222,6 +3508,25 @@ const Town = {
       t.salePetGid = pet.rec.gid;
       t.pending = { source: item.slot, ref: item.refObjId, quantity, at: now() };
     }
+  },
+  // Tops up arrows and bolts at the weapon merchant. A shortfall here (not sold, no bag room, no gold) is reported and
+  // skipped: the rest of the trip still matters.
+  ammo() {
+    const t = this.trip, gp = World.gp, shop = Restock.activeShop();
+    if (!shop || shop.npc !== this.npc('smith')?.gid || shop.error) return this.fail(shop?.error || 'Weapon merchant selection changed.');
+    if (!this.pendingDone(p => this.ammoCount(p.ref) >= p.before + p.quantity) || !this.trip || gp.inventoryPending) return;
+    t.ammoSkipped ||= [];
+    const skip = (s, why) => { t.ammoSkipped.push(s.kind); this.message = `Ammunition: no ${s.kind}s bought, ${why}.`; Log.warn(this.message); UI.toast(this.message, 'warn', 6000); };
+    const s = this.ammoSupplies().find(s => !t.ammoSkipped.includes(s.kind) && this.ammoCount(s.refObjId) < s.target);
+    if (!s) { this.enter('repair'); return; }
+    const offer = shop.offers.find(o => o.refObjId === s.refObjId && (o.currency === undefined || o.currency === 1) &&
+      (!o.contents?.length || o.contents.length === 1 && o.contents[0].refObjId === o.refObjId && o.contents[0].quantity === 1));
+    if (!offer || !(offer.maxStack > 0)) return skip(s, 'this merchant does not sell them');
+    const before = this.ammoCount(s.refObjId), room = World.items().filter(i => i.refObjId === s.refObjId).reduce((n, i) => n + Math.max(0, offer.maxStack - (i.quantity ?? 1)), 0);
+    const quantity = Math.min(s.target - before, offer.purchaseLimit ?? offer.maxStack, 65535, room + Math.max(0, World.freeBagSlots() - 1) * offer.maxStack);
+    if (quantity < 1) return skip(s, 'there is no bag space');
+    if (gp.progression?.gold === undefined || toBigInt(offer.price) * BigInt(quantity) > toBigInt(gp.progression.gold)) return skip(s, 'not enough gold');
+    if (Cmd.raw({ kind: 'shop-buy', tab: offer.tab, slot: offer.slot, quantity }, 'Town: refill ' + s.kind + 's')) t.pending = { ref: s.refObjId, before, quantity, at: now() };
   },
   buy() {
     const t = this.trip, gp = World.gp, shop = Restock.activeShop();
@@ -3291,6 +3596,7 @@ const Town = {
   },
   tick() {
     const c = this.cfg();
+    this.watch();
     if (!this.trip) {
       if (this.blocked() || !this.reason()) return false;
       this.begin();
@@ -3355,7 +3661,7 @@ const Town = {
         if (t.phase === 'recall-wait') { this.lastScrollPoint = { ...t.origin }; this.arrived(); }
         else {
           this.lastScrollPoint = { ...World.pose() };
-          this.trip = null; Hunt.targetGid = Hunt.lootGid = 0; Hunt.state = 'search';
+          this.trip = null; Hunt.targetGid = Hunt.lootGid = 0; Hunt.state = 'search'; this.restartClocks();
           this.message = 'Town service complete; hunting resumed.'; UI.toast(this.message);
         }
       } else {
@@ -3372,11 +3678,17 @@ const Town = {
     } else if (t.phase === 'store') this.store();
     else if (t.phase === 'buy') this.buy();
     else if (t.phase === 'sell') this.sell();
+    else if (t.phase === 'ammo') this.ammo();
     else if (t.phase === 'repair') this.repair();
     else if (t.phase.startsWith('close-')) {
       if (now() - t.at > 15000) this.fail('NPC window did not close.');
       else this.close({ 'close-storage': 'walk-vendor', 'close-vendor': 'walk-smith', 'close-smith': 'walk-gate' }[t.phase]);
     } else if (t.phase === 'reverse') {
+      if (t.recovery) {
+        this.trip = null;
+        Hunt.stop('Recovery town services completed. Check the hunting spot before returning.');
+        return true;
+      }
       if (gp.inventoryPending || World.isCasting()) return true;
       if (t.supplies.some(s => Restock.count(s.refObjId) < s.target) || this.damaged().length || !this.scroll(0x09ec) || !this.scroll(0x19ec)) { this.fail('Final supply, repair or travel-scroll check failed.'); return true; }
       if (World.freeBagSlots() <= 1) { this.fail('Returned to town; free at least two character bag slots before hunting again.'); return true; }
@@ -3600,6 +3912,124 @@ Combat.buffs = function (hunting) {
 };
 
 
+// Party support: heal and buff party members with the player's own skills.
+// Party members come from the party list (social.members); HP is exact for members in view (vitals) and in tenths
+// otherwise (status & 15, as the game's party window draws it). Buffs a member already has are read from the
+// effects the game shows on each player (gameplay.attachedEffects, keyed by gid and skill). Only members in view
+// and within the support range are cast on; this never walks. One cast per tick, after potions and before hunting.
+// Skill target bits (server SkillUiTarget): self 1, monster 4, ally 16, party 32, corpse 128.
+const SUPPORT_TARGET_FRIEND = 16 | 32;
+const SUPPORT_CONFIRM_MS = 6000;  // a buff cast that shows no effect on the member by then is a miss
+const SUPPORT_BACKOFF_MS = 60000; // after two misses in a row that buff on that member waits a minute
+const Support = {
+  holdUntil: 0, sent: new Map(), misses: new Map(), message: 'Party support off.',
+  cfg() { return Settings.profile.party.support; },
+  reset() { this.holdUntil = 0; this.sent.clear(); this.misses.clear(); },
+  // Skills that can be cast on another party member (heals and most buffs), best learned level per group.
+  friendlySkills() {
+    const best = new Map();
+    for (const s of Learned.rows()) {
+      if (s.missing || s.active === false || s.groundTarget || !s.targetRequired || !((s.targets ?? 0) & SUPPORT_TARGET_FRIEND)) continue;
+      const group = s.group ?? s.id, previous = best.get(group);
+      if (!previous || (s.level ?? 0) > (previous.level ?? 0)) best.set(group, s);
+    }
+    return [...best.values()];
+  },
+  // Skills without a target (area heals, party-wide buffs such as dances), for the group heal.
+  areaSkills() { return UI.learnedSkills(true); },
+  skillOf(entry) { return entry?.group ? World.bestOfGroup(entry.group, entry.id) || entry.id : 0; },
+  // The local player first (for "heal myself too"), then every party member, with what is known about each.
+  members() {
+    const social = World.gp?.social, pose = World.pose(), range = (Number(this.cfg().range) || 30) * 10, local = World.localGid();
+    const out = [];
+    const me = World.me();
+    out.push({ self: true, name: World.charName, gid: local, entity: World.local(), hpPct: me.hpPct, mpPct: me.mpPct, alive: !World.isDead(), inRange: true, distance: 0 });
+    for (const m of social?.members || []) {
+      if (!m?.name || m.name === social.localName || m.id === social.self) continue;
+      const e = [...World.ents.values()].find(x => x && x.kind === 'player' && x.name === m.name);
+      const exact = e ? World.hpPctOf(e) : null, distance = e ? dist2D(pose, e) : Infinity;
+      out.push({ self: false, name: m.name, level: m.level, gid: e?.gid || 0, entity: e || null, distance,
+        hpPct: exact ?? Math.min(10, m.status & 15) * 10, mpPct: Math.min(10, m.status >>> 4) * 10,
+        alive: (m.status & 15) !== 0 && e?.appearanceState?.[0] !== 2, inRange: !!e && distance <= range });
+    }
+    return out;
+  },
+  // Whether a member shows an effect of this skill's group, with more than refreshMs left when the game says.
+  has(gid, id, refreshMs = 3000) {
+    const group = World.skill(id)?.group, t = World.simNow();
+    for (const ef of World.gp?.attachedEffects || []) {
+      if (!ef || ef.gid !== gid || !(ef.skill === id || group !== undefined && World.skill(ef.skill)?.group === group)) continue;
+      if (Number.isFinite(ef.remainingMs) && Number.isFinite(ef.receivedAtMs) && t != null && ef.remainingMs - (t - ef.receivedAtMs) <= refreshMs) continue;
+      return true;
+    }
+    return false;
+  },
+  ready(id) {
+    return id && !Combat.blocked?.(id) && Cmd.canCast(id) && Combat.mpOk(id, World.me());
+  },
+  // Select the member and cast at them; a skill without a target is simply cast.
+  cast(id, member, why) {
+    const s = World.skill(id), t = now();
+    if (s?.targetRequired && member && !member.self) {
+      if (!Cmd.select(member.gid) || !Combat.cast(id, member.gid)) return false;
+    } else if (!Combat.cast(id, s?.targetRequired ? World.localGid() : 0)) return false;
+    this.holdUntil = t + Math.max(800, s?.actionMs || 1000) + 300;
+    this.message = why;
+    Log.info('Party support: ' + why);
+    return true;
+  },
+  tick() {
+    const c = this.cfg();
+    if (!c.enabled) { this.message = 'Party support off.'; return false; }
+    if (!World.inWorld() || World.isDead()) { this.message = 'Waiting for a living character.'; return false; }
+    if (!Hunt.running && !c.whileStopped) { this.message = 'Waiting for hunting to start (or tick Also while hunting is stopped).'; return false; }
+    if (now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000) return false;
+    if (now() < this.holdUntil) return true;
+    if (World.isCasting() || World.isSitting() || World.local()?.mountedOn || World.gp.inventoryPending || World.gp.targetPending ||
+      now() - Combat.lastCastAt < Settings.profile.macro.castGapMs) return false;
+    const members = this.members(), party = members.filter(m => !m.self);
+    if (!party.length && !c.heal.self) { this.message = 'Not in a party.'; return false; }
+    const living = members.filter(m => m.alive && m.inRange && (!m.self || c.heal.self));
+    // 1. Group heal when enough members are low.
+    const groupId = this.skillOf(c.group);
+    if (groupId && this.ready(groupId)) {
+      const low = living.filter(m => m.hpPct < c.group.pct);
+      if (low.length >= c.group.count) return this.cast(groupId, low.sort((a, b) => a.hpPct - b.hpPct)[0], `group heal (${low.length} below ${c.group.pct}%)`);
+    }
+    // 2. Heal the lowest member below the threshold.
+    const healId = this.skillOf(c.heal);
+    if (healId && this.ready(healId)) {
+      const low = living.filter(m => m.hpPct < c.heal.pct).sort((a, b) => a.hpPct - b.hpPct)[0];
+      if (low) return this.cast(healId, low, `heal ${low.self ? 'myself' : low.name} (${Math.round(low.hpPct)}%)`);
+    }
+    // 3. Buffs a member does not have yet. A cast that never shows on the member counts as a miss.
+    const t = now();
+    for (const b of c.buffs) {
+      const id = this.skillOf(b);
+      if (!id || !this.ready(id)) continue;
+      const only = splitList(b.only || '');
+      for (const m of party) {
+        if (!m.alive || !m.inRange || only.length && !only.includes(m.name.toLowerCase())) continue;
+        const key = m.name + ':' + b.group, sent = this.sent.get(key), miss = this.misses.get(key) || { n: 0, until: 0 };
+        if (this.has(m.gid, id)) { this.misses.delete(key); this.sent.delete(key); continue; }
+        if (t < miss.until) continue;
+        if (sent && t - sent < SUPPORT_CONFIRM_MS) continue;
+        if (sent) {
+          miss.n++; this.sent.delete(key);
+          if (miss.n >= 2) { miss.n = 0; miss.until = t + SUPPORT_BACKOFF_MS; Log.warn(`Party support: ${World.skillName(id)} did not show on ${m.name}; trying again in a minute.`); }
+          this.misses.set(key, miss);
+          if (t < miss.until) continue;
+        }
+        if (this.cast(id, m, `${World.skillName(id)} on ${m.name}`)) { this.sent.set(key, t); return true; }
+        return false;
+      }
+    }
+    this.message = party.some(m => m.alive && !m.inRange) ? 'Some party members are out of view or out of range.' : 'Party is healed and buffed.';
+    return false;
+  },
+};
+
+
 // Single owner for movement/combat/pickup. Potion use remains a separate emergency lane.
 const startHunting = Hunt.start;
 Hunt.start = function (...args) {
@@ -3608,6 +4038,34 @@ Hunt.start = function (...args) {
   return startHunting.apply(this, args);
 };
 Hunt.lootAllowed = e => Loot.allowed(e);
+// Kill the small ones first. While fighting a stronger monster, switch to a weaker one that is hitting you, then come
+// back: the stronger one is still fighting you, so attackers-first picks it up again. Always on, by design:
+//  1. only monsters that hit you in the last few seconds (World.attackers) and are within chase distance;
+//  2. only a weaker class than the current target (two giants hitting you is no reason to switch);
+//  3. never away from a target below THREAT_FINISH_PCT HP: finish it;
+//  4. never during a cast (the caller only asks between skills);
+//  5. the weakest attacker first (lowest HP), so each kill removes its damage soonest;
+//  6. no flip-flop: the small one becomes the current target and only something weaker still could take its place.
+// With no current target the weakest attacker is picked the same way, so the giant is not selected between two kills.
+const THREAT_RANK = { normal: 1, champion: 2, elite: 4, party: 10, giant: 20, titan: 100, unique: 200 };
+const THREAT_WINDOW_MS = 6000, THREAT_FINISH_PCT = 25;
+Hunt.threat = function (current) {
+  if (World.isCasting() || !current && this.cfg().priority !== 'attackers') return null;
+  const rank = e => THREAT_RANK[monsterClass(e)] ?? 1, hp = e => World.hpPctOf(e) ?? 100;
+  if (current && (World.hpPctOf(current) ?? 100) < THREAT_FINISH_PCT) return null;
+  const sim = World.simNow() ?? 0, pose = World.pose(), chase = this.cfg().chase, limit = current ? rank(current) : Infinity;
+  let best = null;
+  for (const e of World.ents.values()) {
+    if (e === current || !isAttackableMob(e) || this.banned(this.ban, e.gid) || rank(e) >= limit) continue;
+    if (sim - (World.attackers.get(e.gid) ?? -Infinity) >= THREAT_WINDOW_MS || dist2D(pose, e) > chase) continue;
+    if (!best || rank(e) < rank(best) || rank(e) === rank(best) && (hp(e) < hp(best) || hp(e) === hp(best) && dist2D(pose, e) < dist2D(pose, best))) best = e;
+  }
+  if (!best || !current) return best;
+  const from = current.name || monsterClass(current), to = best.name || monsterClass(best);
+  this.threatNote = { gid: best.gid, text: `Combat: switched to ${to} (hitting you); back to ${from} after.` };
+  Log.info(`Switched from ${from} to ${to}, which is hitting you.`);
+  return best;
+};
 Hunt.chooseLoot = () => Loot.choose();
 Hunt.tick = function () {
   if (!this.running) return;
@@ -3617,7 +4075,7 @@ Hunt.tick = function () {
   if (World.isDead()) {
     Loot.suspend();
     this.state = 'dead';
-    if (!this.deathAt) { this.deathAt = now(); Party.noteDeath(); }
+    if (!this.deathAt) { this.deathAt = now(); Party.noteDeath(); Log.info('Died: ' + Party.waitNote()); }
     if ((Town.autoRevive() || H.onDeath === 'revive') && !this.revived && now() - this.deathAt > Party.reviveDelay() && !Party.resBusy()) {
       if (Cmd.rebirth(1)) this.revived = true;
     } else if (!Town.autoRevive() && H.onDeath === 'stop') this.stop('character died');
@@ -3635,19 +4093,14 @@ Hunt.tick = function () {
   if (H.stopInvFull && World.freeBagSlots() === 0) return this.stop('inventory full');
   Loot.preparePet();
   const attacked = this.underAttack(), current = this.currentTarget();
-  if (Loot.petMode()) {
-    // Pet movement does not own the character's combat tick.
-    if (Loot.active) Loot.tick();
-    if (!Loot.active && H.pickup.enabled) {
-      const drop = Loot.choose();
-      if (drop) Loot.begin(drop);
-    }
-  } else {
-    if (attacked) Loot.suspend();
-    // Character pickup owns movement until done or interrupted by an attacker.
-    if (!attacked && Loot.active && Loot.tick()) return;
-    if (H.pickup.enabled && !attacked && (!current || !H.pickup.afterKillOnly) && !World.isSitting()) {
-      const drop = Loot.choose();
+  // One pickup at a time. A pet's request does not own the character's combat tick; a character pickup owns
+  // movement until it is done or an attacker interrupts it. The pet's drops go first, then the character's.
+  if (attacked && Loot.active && !Loot.active.petGid) Loot.suspend();
+  if (Loot.active) { if (Loot.active.petGid) Loot.tick(); else if (Loot.tick()) return; }
+  if (!Loot.active && H.pickup.enabled) {
+    if (Loot.petMode()) { const drop = Loot.choose('pet'); if (drop) Loot.begin(drop); }
+    if (!Loot.active && !attacked && (!current || !H.pickup.afterKillOnly) && !World.isSitting()) {
+      const drop = Loot.choose('character');
       if (drop && Loot.begin(drop)) { this.state = 'loot'; return; }
     }
   }
@@ -3663,7 +4116,7 @@ Hunt.tick = function () {
     this.state = 'resting'; return;
   }
   if (Combat.buffs(true)) { this.state = 'buff'; return; }
-  const target = current || this.chooseTarget();
+  const target = this.threat(current) || current || this.chooseTarget();
   if (target) { this.engage(target); return; }
   this.targetGid = 0; this.state = Loot.active?.petGid ? 'loot' : 'search';
   if (H.returnToCenter && H.center && dist2D(World.pose(), H.center) > Math.max(40, H.radius * 0.5) && now() - this.lastMoveAt > 2500) {
@@ -3690,6 +4143,33 @@ function stopAll() {
   if (active && World.inWorld() && !World.isDead()) Cmd.move(World.pose());
 }
 
+// An imbue's cooldown is as long as the imbue itself, so it can be renewed only once it has (nearly) run out.
+// The 1.2 s wait after a send also holds while the old imbue still shows time left: until the answer arrives,
+// resending into the server's cooldown only earns refusals that pause the imbue.
+const IMBUE_RENEW_MS = 400;
+Combat.imbue = function () {
+  const M = Settings.profile.macro;
+  if (!M.imbue) return false;
+  const id = this.resolve(M.imbue);
+  if (!id || this.blocked(id) || !Cmd.canCast(id) || !this.mpOk(id, World.me())) return false;
+  if (World.buffRemaining(id) > IMBUE_RENEW_MS) return false;
+  if (now() - (this.buffCastAt.get('imbue') || 0) < 1200) return false;
+  if (this.cast(id, 0)) {
+    this.buffCastAt.set('imbue', now());
+    return true;
+  }
+  return false;
+};
+// A skill with a cast time reads the imbue when it releases, not when it is pressed, and the game takes an imbue
+// in the middle of another skill's cast (an instant self skill runs beside it). The imbue usually comes back
+// mid-cast, so it is cast right away: waiting for the cast to end released that skill without it.
+const fightBetweenCasts = Combat.fight;
+Combat.fight = function (target) {
+  const M = Settings.profile.macro;
+  if (target && M.imbueBeforeAttack && World.isCasting() && World.gp.target === target.gid && !World.gp.targetPending &&
+    now() - this.lastCastAt >= (M.castGapMs ?? 250) && this.imbue()) return;
+  return fightBetweenCasts.call(this, target);
+};
 // Berserk fires when the gauge is full and the target's class is ticked in Combat options.
 Combat.berserk = function (cls) {
   if (!Settings.profile.macro.berserkClasses?.[cls] || World.berserkGauge < 5) return false;
@@ -3755,13 +4235,19 @@ const Controller = {
       Party.resumeTick();
       AutoMastery.tick();
       Potion.tick();
+      ItemRules.dropTick();
       Loot.checkPetFull();
       if (Town.tick()) { this.mode = 'town service'; return; }
+      if (Trap.tick()) { this.mode = 'escape'; return; }
+      if (Chase.tick()) { this.mode = 'obstacle pursuit'; return; }
       if (BuffGear.tick()) { this.mode = 'buff gear'; return; }
       if (SpeedScroll.tick()) { this.mode = 'speed scroll'; return; }
       if (!WalkBack.active && !Restock.trip && !Restock.recording && !Controller.resumeAfterRevive &&
           !Restock.activeShop() && !World.gp.storage && Resurrect.tick()) {
         this.mode = 'resurrect'; return;
+      }
+      if (!WalkBack.active && !Restock.trip && !Restock.recording && !Restock.activeShop() && !World.gp.storage && Support.tick()) {
+        this.mode = 'party support'; return;
       }
       if (WalkBack.active) { this.mode = 'returning'; WalkBack.tick(); }
       else if (Restock.recording) this.mode = 'recording';
@@ -3850,6 +4336,832 @@ bus.on('hunt', running => {
   AntiStuck.reset();
   if (!running) AntiStuck.message = '';
 });
+
+
+/*
+===========================================================================
+lean-chase.js - exclusive ownership of blocked combat approaches
+
+Failed routes retain movement until stopped. HP changes and jitter cannot
+renew an episode budget; only observed local impacts establish damage.
+===========================================================================
+*/
+const CHASE_LIMIT = {
+	send: 900,
+	stalled: 3000,
+	episode: 15000,
+	unknown: 5000,
+	verify: 500,
+	ban: 60000,
+	memory: 15000,
+	progress: 8,
+	targetMove: 40,
+	replans: 2
+};
+const CHASE_OBSERVE_MS = 8000;
+
+/*
+================
+Chase
+================
+*/
+const Chase = {
+	s: null,
+	detour: null,
+	message: "",
+	detours: 0,
+	failures: [],
+	hits: new Map(),
+	seenHits: new Set(),
+	castIds: new WeakMap(),
+	nextCastId: 0,
+	/*
+  ================
+  cfg
+  ================
+  */
+	cfg() {
+		return Settings.profile.hunt.detour;
+	},
+	/*
+  ================
+  reset
+  ================
+  */
+	reset( clear = false ) {
+		this.s = this.detour = null;
+		if ( clear ) {
+			this.failures = [];
+			this.hits.clear();
+			this.seenHits.clear();
+		}
+	},
+	/*
+  ================
+  owns
+  ================
+  */
+	owns() {
+		return !!this.s && ![ "attack", "observe" ].includes( this.s.phase );
+	},
+	/*
+  ================
+  hit
+  ================
+  */
+	hit( gid, since = now() - 8000 ) {
+		return (this.hits.get( gid ) ?? -Infinity) >= since;
+	},
+	/*
+  ================
+  observe
+
+  Repeated cast publications are not new hits. Party damage cannot cancel a
+  detour; a local cast send without positive result impacts proves nothing.
+  ================
+  */
+	observe( cast ) {
+		if ( cast.caster !== World.localGid() ) return;
+		if ( !this.castIds.has( cast ) ) this.castIds.set( cast, ++this.nextCastId );
+		const token = cast.token ?? cast.startedAtMs ?? this.castIds.get( cast );
+		for ( const result of cast.results || [] ) {
+			for ( const [index, impact] of (result.impacts || []).entries() ) {
+				if ( !(impact.damage > 0) ) continue;
+				const key = `${token}:${cast.skill}:${result.target}:${impact.stage ?? index}:${impact.damage}`;
+				if ( this.seenHits.has( key ) ) continue;
+				this.seenHits.add( key );
+				this.hits.set( result.target, now() );
+			}
+		}
+		while ( this.seenHits.size > 512 ) this.seenHits.delete( this.seenHits.values().next().value );
+		while ( this.hits.size > 256 ) this.hits.delete( this.hits.keys().next().value );
+	},
+	/*
+  ================
+  radius
+
+  Unknown weapon reach is not guessed. Authored skills can supply a conservative
+  stand-off goal; successful ranged offense is preserved independently.
+  ================
+  */
+	radius( target ) {
+		const ranges = Combat.rotation( monsterClass( target ) ).map( e => World.skill( Combat.resolve( e ) ) )
+			.filter( s => s?.targetRequired && !s.groundTarget && s.range > 0 ).map( s => s.range );
+		return Math.min( 120, ranges.length ? Math.max( 7, Math.min( ...ranges ) - 5 ) : 7 );
+	},
+	/*
+  ================
+  canProbe
+
+  Authored range permits one bounded ranged trial, not a new line-of-sight rule.
+  ================
+  */
+	canProbe( target ) {
+		const distance = dist2D( World.pose(), target );
+		return Combat.rotation( monsterClass( target ) ).some( e => {
+			const s = World.skill( Combat.resolve( e ) );
+			return s?.targetRequired && !s.groundTarget && s.range >= 60 && s.range >= distance;
+		} );
+	},
+	/*
+  ================
+  remember
+  ================
+  */
+	remember( target ) {
+		this.failures.push( {
+			gid: target.gid,
+			from: { ...this.s.origin },
+			target: { ...target },
+			at: now(),
+			revision: Navigation.revision,
+			epoch: World.epoch
+		} );
+		if ( this.failures.length > 32 ) this.failures.shift();
+	},
+	/*
+  ================
+  repeated
+
+  A short-lived failure describes one approach, never a permanent area ban.
+  ================
+  */
+	repeated( target, from ) {
+		this.failures = this.failures.filter( f =>
+			now() - f.at < CHASE_LIMIT.memory &&
+			f.epoch === World.epoch && f.revision === Navigation.revision
+		);
+		return this.failures.some( f =>
+			f.gid === target.gid && dist2D( f.from, from ) < 40 && dist2D( f.target, target ) < 40
+		);
+	},
+	/*
+  ================
+  abandon
+  ================
+  */
+	abandon( target, reason ) {
+		this.remember( target );
+		this.s.phase = "abandon";
+		this.s.reason = reason;
+		this.s.abandonAt = now();
+		this.s.halted = false;
+		this.s.released = false;
+		this.message = "Blocked target: " + reason + "; stopping its approach.";
+		return true;
+	},
+	/*
+  ================
+  settle
+
+  A refused or cast-held halt retains ownership rather than resuming attacks.
+  ================
+  */
+	settle() {
+		const s = this.s;
+		if ( World.isCasting() || World.gp?.targetPending ) return false;
+		if ( !s.halted ) {
+			if ( Cmd.move( World.pose() ) ) s.halted = true;
+			return false;
+		}
+		return !World.gp?.pendingMoves;
+	},
+	/*
+  ================
+  stalled
+
+  A failed simplified query is not proof that native combat cannot proceed.
+  Keep ordinary target ownership until fresh state shows no approach or damage.
+  ================
+  */
+	stalled( target ) {
+		const s = this.s, t = now(), distance = dist2D( World.pose(), target );
+		if ( !s.observation ) s.observation = { at: t, best: distance, state: World.gp };
+		const o = s.observation;
+		if (
+			World.gp.target !== target.gid || World.gp.targetPending || World.isCasting() ||
+			World.gp.inventoryPending || this.hit( target.gid, o.at ) || distance < o.best - CHASE_LIMIT.progress
+		) {
+			o.at = t;
+			o.best = distance;
+			o.state = World.gp;
+		}
+		return World.gp !== o.state && t - o.at >= Math.max( CHASE_OBSERVE_MS, this.cfg().stallMs );
+	},
+	/*
+  ================
+  observeApproach
+  ================
+  */
+	observeApproach( target ) {
+		this.s.phase = "observe";
+		this.s.at = now();
+		this.detour = null;
+		this.stalled( target );
+		this.message = "Letting the game approach the selected target; route result is inconclusive.";
+		return false;
+	},
+	/*
+  ================
+  drive
+  ================
+  */
+	drive( target ) {
+		if ( !this.cfg()?.enabled || !Hunt.running || !World.inWorld() || World.isDead() ) {
+			this.reset();
+			return false;
+		}
+		const pose = World.pose(), t = now();
+		if ( !pose || !Number.isFinite( dist2D( pose, target ) ) ) return false;
+		// The admitted bot planner is outdoor-only. Do not disable otherwise valid
+		// dungeon combat merely because no outdoor collision scene can cover it.
+		if ( pose.regionId & DUNGEON ) {
+			this.reset();
+			return false;
+		}
+		let s = this.s;
+		if ( !s || s.gid !== target.gid ) {
+			s = this.s = {
+				gid: target.gid,
+				phase: "evaluate",
+				at: t,
+				origin: { ...pose },
+				target: { ...target },
+				progressAt: t,
+				best: Infinity,
+				revision: Navigation.revision,
+				epoch: World.epoch,
+				replans: 0,
+				halted: false,
+				route: [],
+				index: 0,
+				sentAt: -Infinity,
+				verifyAt: null
+			};
+			this.detour = null;
+		}
+		if ( s.epoch !== World.epoch ) {
+			this.reset();
+			return true;
+		}
+		if ( s.phase === "probe" ) {
+			if ( s.probeAt !== null && this.hit( target.gid, s.probeAt ) ) {
+				s.phase = "attack";
+				s.at = t;
+				s.checkedAt = t;
+				return false;
+			}
+			// Allow ordinary combat to admit the trial, including preparatory imbues.
+			if ( s.probeAt === null && t - s.probeReadyAt < CHASE_LIMIT.unknown ) return false;
+			if ( s.probeAt !== null && t - s.probeAt < 2000 ) return true;
+			s.phase = "evaluate";
+		}
+		if ( s.phase === "abandon" ) {
+			if ( t - s.abandonAt > CHASE_LIMIT.episode ) {
+				Hunt.stop( "Blocked approach could not be stopped safely." );
+				return true;
+			}
+			if ( !this.settle() ) return true;
+			if ( World.gp.target === target.gid ) {
+				if ( !s.released && Cmd.release() ) {
+					s.released = true;
+					s.releaseAt = t;
+				} else if ( s.released && t - s.releaseAt > CHASE_LIMIT.unknown ) {
+					Hunt.stop( "Blocked target release was not confirmed." );
+				}
+				return true;
+			}
+			Hunt.ban.set( target.gid, t + CHASE_LIMIT.ban );
+			Hunt.targetGid = 0;
+			this.message = "Dropped blocked target: " + s.reason;
+			Log.warn( this.message );
+			this.reset();
+			return true;
+		}
+		if ( s.phase === "attack" && this.hit( target.gid ) && !this.detour ) {
+			s.at = t;
+			return false;
+		}
+		const observedStall = s.phase === "observe" && this.stalled( target );
+		if ( s.phase === "observe" && !observedStall ) return false;
+		if ( t - s.at > CHASE_LIMIT.episode ) return this.abandon( target, "approach timed out" );
+		if ( s.phase === "attack" && t - s.checkedAt < this.cfg().stallMs ) return false;
+		if ( [ "evaluate", "unknown", "attack", "observe" ].includes( s.phase ) ) {
+			const query = Navigation.attackRoute( pose, target, this.radius( target ) );
+			s.checkedAt = t;
+			if ( query.status === "unknown" ) {
+				return this.observeApproach( target );
+			}
+			if ( query.status === "invalid-start" ) {
+				if ( !observedStall ) return this.observeApproach( target );
+				if ( !Trap.cfg()?.enabled ) return this.abandon( target, "blocked start; escape recovery is disabled" );
+				Trap.request( "Current position is blocked." );
+				return true;
+			}
+			if ( query.status === "direct" ) {
+				if ( s.phase === "attack" && World.gp.target === target.gid && !World.isCasting() ) {
+					const distance = dist2D( pose, target );
+					if ( distance < s.best - CHASE_LIMIT.progress ) {
+						s.best = distance;
+						s.at = t;
+					} else if ( t - s.at >= Math.max( this.cfg().stallMs * 2, CHASE_LIMIT.stalled ) ) {
+						return this.abandon( target, "native approach made no progress" );
+					}
+				}
+				s.phase = "attack";
+				s.halted = false;
+				return false;
+			}
+			if ( !s.probed && this.canProbe( target ) ) {
+				if ( World.gp.target !== target.gid || World.gp.targetPending ) {
+					Cmd.select( target.gid );
+					return true;
+				}
+				if ( World.isCasting() ) return true;
+				s.probed = true;
+				s.probeReadyAt = t;
+				s.probeAt = null;
+				s.phase = "probe";
+				return false;
+			}
+			if ( query.status !== "route" ) {
+				if ( !observedStall || query.status === "search-limit" ) return this.observeApproach( target );
+				return this.abandon(
+					target,
+					"native approach stalled; planner found no route"
+				);
+			}
+			if ( this.repeated( target, pose ) ) return this.abandon( target, "this approach recently failed" );
+			s.phase = "route";
+			s.route = query.route;
+			s.index = 0;
+			s.progressAt = t;
+			s.best = Infinity;
+			s.target = { ...target };
+			s.revision = Navigation.revision;
+			this.detour = s;
+			this.detours++;
+			this.message = "Walking around the obstacle before attacking.";
+		}
+		if ( !this.settle() ) return true;
+		if ( World.isSitting() || World.gp?.inventoryPending ) return true;
+		if (
+			s.revision !== Navigation.revision || dist2D( s.target, target ) > CHASE_LIMIT.targetMove ||
+			t - s.progressAt > CHASE_LIMIT.stalled
+		) {
+			if ( ++s.replans > CHASE_LIMIT.replans ) return this.abandon( target, "detour made no progress" );
+			s.phase = "evaluate";
+			s.halted = false;
+			this.detour = null;
+			return true;
+		}
+		while ( s.index < s.route.length && dist2D( pose, s.route[s.index] ) <= PURSUIT_NAV.arrive ) {
+			s.index++;
+			s.progressAt = t;
+			s.best = Infinity;
+		}
+		if ( s.index >= s.route.length ) {
+			if ( !Navigation.segment( pose, target ) ) {
+				return this.abandon( target, "final attack approach is blocked" );
+			}
+			if ( World.gp === s.verifyState ) return true;
+			s.verifyAt ??= t;
+			s.verifyState = World.gp;
+			if ( t - s.verifyAt < CHASE_LIMIT.verify ) return true;
+			s.phase = "attack";
+			s.at = t;
+			s.checkedAt = t;
+			s.halted = false;
+			this.detour = null;
+			return true;
+		}
+		const destination = s.route[s.index], distance = dist2D( pose, destination );
+		if ( distance < s.best - CHASE_LIMIT.progress ) {
+			s.best = distance;
+			s.progressAt = t;
+		}
+		if ( !Navigation.segment( pose, destination ) ) {
+			return this.abandon( target, "next waypoint is no longer reachable" );
+		}
+		if ( t - s.sentAt >= CHASE_LIMIT.send ) {
+			const delta = regionDelta( pose, destination ), length = Math.hypot( ...delta );
+			const start = Navigation.local( pose ), scale = Math.min( 1, PURSUIT_NAV.step / length );
+			const step = Navigation.pose( { x: start.x + delta[0] * scale, z: start.z + delta[1] * scale }, pose.y );
+			if ( Navigation.segment( pose, step ) && Cmd.move( step ) ) s.sentAt = t;
+		}
+		return true;
+	},
+	/*
+  ================
+  tick
+  ================
+  */
+	tick() {
+		if ( !this.owns() ) return false;
+		if (
+			!Hunt.running || !World.inWorld() || World.isDead() ||
+			now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000 ||
+			Town.trip || WalkBack.active || Restock.trip || Restock.recording || Restock.activeShop() ||
+			World.gp?.storage
+		) {
+			this.reset();
+			return false;
+		}
+		const target = World.ents.get( this.s.gid );
+		if ( !isAttackableMob( target ) ) {
+			if ( !this.settle() ) return true;
+			this.reset();
+			return true;
+		}
+		Hunt.state = "fight";
+		Loot.preparePet();
+		if ( Loot.active?.petGid ) Loot.tick();
+		else if ( !Loot.active && Hunt.cfg().pickup.enabled && Loot.petMode() ) {
+			const drop = Loot.choose( "pet" );
+			if ( drop ) Loot.begin( drop );
+		}
+		return this.drive( target );
+	}
+};
+
+/*
+================
+engageWithObstaclePursuit
+================
+*/
+const engageBeforeChase = Hunt.engage;
+Hunt.engage = function( target ) {
+	if ( Chase.drive( target ) ) return;
+	return engageBeforeChase.apply( this, arguments );
+};
+// Cmd emits this event only after local dispatch succeeds. Selection, buffs and
+// refused sends cannot consume the probe's damage observation window.
+bus.on( "command", command => {
+	const s = Chase.s;
+	if ( s?.phase !== "probe" || s.probeAt !== null || command.gid !== s.gid ) return;
+	if ( command.kind === "attack" || command.kind === "skill" && World.skill( command.skillId )?.targetRequired ) {
+		s.probeAt = now();
+	}
+});
+bus.on( "cast", cast => Chase.observe( cast ) );
+bus.on( "hunt", () => Chase.reset() );
+for ( const event of [ "reset", "profile", "character" ] ) bus.on( event, () => Chase.reset( true ) );
+Hook.observers.push( command => {
+	if ( command?.kind === "gameplay" ) Chase.reset();
+} );
+
+
+/*
+===========================================================================
+lean-trap.js - bounded recovery using legal, observed movement
+
+Owns escape admission, reverse breadcrumbs and a second move that confirms
+freedom. A local send or a cast timestamp is never proof of escape.
+===========================================================================
+*/
+const TRAP_LIMIT = {
+	admission: 5000,
+	motion: 6000,
+	verify: 500,
+	crumbs: 32,
+	candidates: 4,
+	arrive: 7,
+	progress: 8,
+	recallCooldown: 300000
+};
+
+/*
+================
+Trap
+================
+*/
+const Trap = {
+	crumbs: [],
+	idle: null,
+	stage: 0,
+	at: 0,
+	from: null,
+	tile: "unknown",
+	message: "",
+	lastBreadcrumbAt: -Infinity,
+	run: null,
+	lastRecallAt: -Infinity,
+	trace: [],
+	/*
+  ================
+  cfg
+  ================
+  */
+	cfg() {
+		return Settings.profile.hunt.trap;
+	},
+	/*
+  ================
+  walking
+  ================
+  */
+	walking() {
+		return [ "fight", "return", "loot" ].includes( Hunt.state ) && !World.isCasting() && !World.isSitting();
+	},
+	/*
+  ================
+  busy
+  ================
+  */
+	busy() {
+		return !!(Town.trip || WalkBack.active || Resurrect.trip || Restock.trip || Restock.recording ||
+			BuffGear.run || Alchemy.run || World.gp?.storage || Restock.activeShop());
+	},
+	/*
+  ================
+  reset
+  ================
+  */
+	reset( clearCrumbs = false ) {
+		this.idle = null;
+		this.stage = 0;
+		this.from = null;
+		this.run = null;
+		if ( clearCrumbs ) this.crumbs = [];
+	},
+	/*
+  ================
+  record
+
+  Local, opt-in diagnostic detail. Ordinary report uploads do not include poses.
+  ================
+  */
+	record( reason ) {
+		this.message = reason;
+		if ( this.cfg().diagnostics ) {
+			this.trace.push( {
+				at: now(),
+				reason,
+				stage: this.stage,
+				pose: { ...World.pose() },
+				epoch: World.epoch,
+				revision: Navigation.revision,
+				sent: this.run?.pending?.sentAt ?? null
+			} );
+			if ( this.trace.length > 64 ) this.trace.shift();
+		}
+	},
+	/*
+  ================
+  blockedAt
+  ================
+  */
+	blockedAt( pose ) {
+		return { open: "no", blocked: "yes", unknown: "unknown" }[Navigation.pointStatus( pose )];
+	},
+	/*
+  ================
+  nearestOpen
+  ================
+  */
+	nearestOpen( pose ) {
+		return Navigation.escapeCandidates( pose )[0] || null;
+	},
+	/*
+  ================
+  stepBack
+  ================
+  */
+	stepBack( pose ) {
+		for ( let i = this.crumbs.length - 1; i >= 0; i-- ) {
+			const p = this.crumbs[i];
+			if (
+				p.epoch !== undefined && p.epoch !== World.epoch ||
+				p.revision !== undefined && p.revision !== Navigation.revision
+			) continue;
+			if ( dist2D( pose, p ) >= 8 && dist2D( pose, p ) <= 120 && Navigation.segment( pose, p, true ) ) return p;
+		}
+		return null;
+	},
+	/*
+  ================
+  status
+  ================
+  */
+	status() {
+		return this.stage ? this.message : "";
+	},
+	/*
+  ================
+  request
+  ================
+  */
+	request( reason ) {
+		if ( !this.cfg()?.enabled || this.run ) return;
+		const pose = World.pose();
+		if ( !pose || !Hunt.running || !World.inWorld() || World.isDead() || this.busy() ) return;
+		this.from = { ...pose };
+		this.tile = this.blockedAt( pose );
+		this.stage = 1;
+		this.at = now();
+		this.run = {
+			epoch: World.epoch,
+			revision: Navigation.revision,
+			manualAt: Manual.lastAt,
+			at: now(),
+			phase: "halt",
+			pending: null,
+			attempted: [],
+			retreat: false,
+			verified: false,
+			gid: Hunt.targetGid || Chase.s?.gid || 0,
+			target: Chase.s?.target,
+			fresh: null
+		};
+		Loot.suspend();
+		this.record( "Recovering: " + reason );
+		Log.warn( this.message );
+	},
+	/*
+  ================
+  candidate
+  ================
+  */
+	candidate() {
+		const r = this.run, pose = World.pose();
+		const crumb = !r.retreat && this.stepBack( pose );
+		if ( crumb ) {
+			r.retreat = true;
+			return crumb;
+		}
+		this.stage = 2;
+		return Navigation.escapeCandidates( pose ).find( p => !r.attempted.some( a => dist2D( a, p ) < 7 ) ) || null;
+	},
+	/*
+  ================
+  fail
+
+  Recall is opt-in and delegates to the existing town owner. Hunting is not
+  resumed into the same trap without a completed legal trip and approach ban.
+  ================
+  */
+	fail( reason ) {
+		const r = this.run;
+		if ( r?.gid ) Hunt.ban.set( r.gid, now() + CHASE_LIMIT.ban );
+		const recall = this.cfg().recall && now() - this.lastRecallAt >= TRAP_LIMIT.recallCooldown &&
+			Town.cfg().enabled && !Town.validate();
+		this.record( "Trapped: " + reason );
+		Log.warn( this.message );
+		Sound.play( "pet-full" );
+		this.reset( true );
+		Chase.reset();
+		if ( recall ) {
+			this.lastRecallAt = now();
+			Town.begin();
+			// A recovery trip ends in town. Automatically reversing would reenter
+			// the same blocked origin, so this safety trip never spends a reverse.
+			if ( Town.trip ) Town.trip.recovery = true;
+			return;
+		}
+		Hunt.stop( "character cannot move (trapped): " + reason );
+	},
+	/*
+  ================
+  free
+  ================
+  */
+	free() {
+		const r = this.run;
+		if ( r?.gid ) Hunt.ban.set( r.gid, now() + CHASE_LIMIT.ban );
+		if ( Chase.s && r?.target ) Chase.remember( r.target );
+		Hunt.targetGid = 0;
+		this.record( "Free again: two movement steps confirmed." );
+		Log.info( this.message );
+		Chase.reset();
+		this.reset( true );
+	},
+	/*
+  ================
+  tick
+  ================
+  */
+	tick() {
+		const t = now(), pose = World.pose();
+		if ( !this.cfg()?.diagnostics ) this.trace = [];
+		if (
+			!this.cfg()?.enabled || !Hunt.running || !World.inWorld() || World.isDead() || this.busy() ||
+			now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000
+		) {
+			this.reset();
+			return false;
+		}
+		if ( !pose ) return false;
+		if ( pose.regionId & DUNGEON ) {
+			this.reset( true );
+			return false;
+		}
+		if ( !this.run ) {
+			if (
+				Navigation.pointStatus( pose ) === "open" && t - this.lastBreadcrumbAt >= 500 &&
+				(!this.crumbs.length || dist2D( this.crumbs.at( -1 ), pose ) >= 8)
+			) {
+				this.crumbs.push( { ...pose, epoch: World.epoch, revision: Navigation.revision } );
+				this.lastBreadcrumbAt = t;
+				if ( this.crumbs.length > TRAP_LIMIT.crumbs ) this.crumbs.shift();
+			}
+			if ( !this.walking() || Chase.hit( Hunt.targetGid ) ) {
+				this.idle = null;
+				return false;
+			}
+			if ( !this.idle || dist2D( this.idle.pose, pose ) > TRAP_LIMIT.progress ) {
+				this.idle = { pose: { ...pose }, since: t };
+			}
+			if ( t - this.idle.since < this.cfg().seconds * 1000 ) return false;
+			this.request( "no useful movement or confirmed damage." );
+		}
+		const r = this.run;
+		if ( !r ) return false;
+		if ( r.epoch !== World.epoch || r.revision !== Navigation.revision || r.manualAt !== Manual.lastAt ) {
+			this.reset( true );
+			Chase.reset();
+			return true;
+		}
+		if ( t - r.at > 45000 ) {
+			this.fail( "escape episode timed out" );
+			return true;
+		}
+		if ( r.phase === "halt" ) {
+			if ( !World.isCasting() && !World.gp?.targetPending && Cmd.move( pose ) ) r.phase = "choose";
+			return true;
+		}
+		if ( World.isCasting() || World.isSitting() || World.gp?.inventoryPending || World.gp?.pendingMoves ) {
+			return true;
+		}
+		let p = r.pending;
+		if ( p ) {
+			const distance = dist2D( pose, p.to );
+			// New gameplay state, an actual admitted send and a stable endpoint are
+			// required; old snapshots or one correction cannot complete an escape.
+			if (
+				p.sentAt !== null && World.gp !== p.state && distance <= TRAP_LIMIT.arrive &&
+				Navigation.pointStatus( pose ) === "open"
+			) {
+				if ( p.arrivedAt === null ) {
+					p.arrivedAt = t;
+					p.arrivedState = World.gp;
+					return true;
+				}
+				if ( World.gp === p.arrivedState || t - p.arrivedAt < TRAP_LIMIT.verify ) return true;
+				if ( r.verified ) {
+					this.free();
+					return true;
+				}
+				r.verified = true;
+				r.pending = null;
+				r.phase = "choose";
+			} else {
+				p.arrivedAt = null;
+				if ( p.sentAt === null ) {
+					if ( t - p.at > TRAP_LIMIT.admission ) {
+						this.fail( "escape movement could not be admitted" );
+						return true;
+					}
+					if ( Navigation.segment( pose, p.to, true ) && Cmd.move( p.to ) ) {
+						p.sentAt = t;
+						p.state = World.gp;
+						this.record( "Escape move sent; waiting for observed arrival." );
+					}
+					return true;
+				}
+				if ( t - p.sentAt < TRAP_LIMIT.motion ) return true;
+				r.pending = null;
+				r.phase = "choose";
+				r.verified = false;
+				this.record( "Escape did not reach its endpoint; choosing another legal step." );
+			}
+		}
+		if ( r.attempted.length >= TRAP_LIMIT.candidates ) {
+			this.fail( "bounded escape attempts failed" );
+			return true;
+		}
+		const to = this.candidate();
+		if ( !to ) {
+			this.fail( "no legal escape endpoint is reachable" );
+			return true;
+		}
+		r.attempted.push( { ...to } );
+		r.pending = { to: { ...to }, at: t, sentAt: null, state: World.gp, arrivedAt: null };
+		this.record(
+			r.verified ? "Verifying escape with a second movement step." : "Trying a collision-checked escape step."
+		);
+		return true;
+	}
+};
+bus.on( "hunt", () => Trap.reset( true ) );
+for ( const event of [ "reset", "profile", "character" ] ) {
+	bus.on( event, () => {
+		Trap.reset( true );
+		Trap.trace = [];
+	} );
+}
+Hook.observers.push( command => {
+	if ( command?.kind === "gameplay" ) Trap.reset( true );
+} );
 
 
 // Always-on reconnect. When the connection to the game is lost (a server restart, a network drop) the bot waits for the
@@ -3954,6 +5266,8 @@ const AutoMastery = {
     const add = e => { const g = e?.group ?? e?.id; if (Number.isInteger(g) && !seen.has(g)) { seen.add(g); groups.push(g); } };
     for (const key of CLASS_KEYS) (m.rotations[key] || []).forEach(add);
     (m.buffs || []).forEach(add); add(m.imbue);
+    // The whole learned skill line: every other skill group the character already has, after the ones it uses.
+    if (this.cfg().scope === 'all') for (const g of World.groups.keys()) if (!seen.has(g) && this.groupLevel(g)) { seen.add(g); groups.push(g); }
     return groups;
   },
   skillReason(row, progression) {
@@ -3989,17 +5303,22 @@ const AutoMastery = {
   skillStep(progression, skipped) {
     if (!this.cfg().skills) return false;
     if (!World.groups.size) { skipped.push('skill catalogue not loaded'); return false; }
-    for (const group of this.wanted()) {
+    const groups = this.wanted();
+    if (!groups.length) { skipped.push(this.cfg().scope === 'all' ? 'no learned skills found' : 'no skills in your attack rotations, buffs or imbue yet'); return false; }
+    const quiet = [], name = group => World.skillName(World.bestOfGroup(group, (World.groups.get(group) || [])[0]?.id) || (World.groups.get(group) || [])[0]?.id) || 'Skill ' + group;
+    const summary = () => { for (const line of quiet.slice(0, 6)) skipped.push(line); if (quiet.length > 6) skipped.push('and ' + (quiet.length - 6) + ' more skills'); };
+    for (const group of groups) {
       const current = this.groupLevel(group);
-      if (!current) continue;
+      if (!current) { quiet.push(name(group) + ': not learned yet'); continue; }
       const row = (World.groups.get(group) || []).find(s => s.level === current + 1);
-      if (!row) continue;
-      const label = (World.skillName(World.bestOfGroup(group, row.id) || row.id) || 'Skill') + ' level ' + row.level;
+      if (!row) { quiet.push(name(group) + ': already at its highest level (' + current + ')'); continue; }
+      const label = name(group) + ' level ' + row.level;
       if ((this.blocked.get('s' + row.id) ?? 0) > now()) { skipped.push(label + ': recently refused'); continue; }
       const why = this.skillReason(row, progression);
       if (why) { skipped.push(label + ': ' + why); continue; }
       return this.send('skill-train', row.id, 'Learning ' + label, { name: label });
     }
+    summary();
     return false;
   },
   tick() {
@@ -4026,8 +5345,10 @@ const AutoMastery = {
     if (now() - this.lastAt < 1500 || !Cmd.spaced('mastery-train') || !Cmd.spaced('skill-train')) return;
     const skipped = [], order = c.order === 'skills' ? ['skills', 'masteries'] : c.order === 'alternate' ? (this.turn === 'skills' ? ['skills', 'masteries'] : ['masteries', 'skills']) : ['masteries', 'skills'];
     for (const step of order) if (step === 'masteries' ? this.masteryStep(progression, skipped) : this.skillStep(progression, skipped)) return;
+    // The order setting only matters when both switches are on, so say when the skills one is off.
+    if (!c.skills) skipped.push('skills are not raised: "Upgrade my rotation and buff skills automatically" is off');
     this.message = c.enabled && !c.ids.length && !c.skills ? 'Choose which masteries to raise.'
-      : 'Nothing to raise (' + (skipped.join('; ') || 'selected masteries not found') + ').';
+      : 'Nothing to raise (' + (skipped.slice(0, 8).join('; ') + (skipped.length > 8 ? '; and ' + (skipped.length - 8) + ' more' : '') || 'selected masteries not found') + ').';
   },
   status() { return this.message; },
   draw(parent) {
@@ -4043,8 +5364,9 @@ const AutoMastery = {
     }
     box.append(UI.number('Keep this many levels below my level', () => this.cfg().gap, v => this.cfg().gap = v, 0, 50),
       UI.check('Upgrade my rotation and buff skills automatically', () => this.cfg().skills, v => { this.cfg().skills = v; this.pending = null; this.blocked.clear(); }),
+      UI.select('Skills to upgrade', [['rotation', 'Only skills in my rotations, buffs and imbue'], ['all', 'All skills I have learned']], () => this.cfg().scope === 'all' ? 'all' : 'rotation', v => { this.cfg().scope = v; this.pending = null; this.blocked.clear(); }),
       UI.number('Keep this many skill points unspent', () => this.cfg().reserve, v => this.cfg().reserve = v, 0, 100000000),
-      UI.select('Spend skill points on', [['masteries', 'Masteries first'], ['skills', 'Skills first'], ['alternate', 'Alternate']], () => this.cfg().order, v => this.cfg().order = v));
+      UI.select('Order when both are ticked', [['masteries', 'Masteries first'], ['skills', 'Skills first'], ['alternate', 'Alternate']], () => this.cfg().order, v => this.cfg().order = v));
     this.note = el('p', this.message, 'muted');
     box.append(this.note, el('p', 'Trains one level at a time and waits for each to be confirmed. Masteries are raised in the order you tick them until they reach your character level (or 120) minus the gap; level 0 is free, otherwise the price is the table cost of the current level. Skills are the next level of the attack, buff and imbue skills you already use, using the game\'s own requirements (mastery level, prerequisite skills, STR and INT, skill points). The reserve is never spent. Works while hunting is stopped and does nothing while you are dead. If the server refuses a level (for example its mastery total limit) the bot waits a minute before trying again. Off by default and saved per character.', 'muted'));
     parent.append(box);
@@ -4138,7 +5460,7 @@ Potion.tick = function () {
 
 
 const LEAN_SKIN = {"f_lu":"data:image/png;base64,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","f_mu":"data:image/png;base64,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","f_ru":"data:image/png;base64,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","f_ls":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAACACAYAAAB5sSvuAAAD6ElEQVR4nO1bS44UMQx9jGrhknpRIw0S1+AwnIA9K67DBglxFI4BexbTi5HKi5JAduzE9QGJNc+oJ01XJXm2n5MoiV8tT8uvjx8+4tPnL3j/7i0+ff2G7z++YycTIPFVASwiwCTAhvbAyg3QTSGTtFJkfJ+A+4tiuYmX9ru3OVkd+Lsu1k7IbD9NMx4SwLKcXzrJJFhuizfa4arVsT/RkXfc2kqgVs9KVUBuqWqRrYJq5Qpg1TUAhgUS7JU4hK1ZIgHALKTqz9IIDax2a95f7vu23dLRppVuRfV2DJTJWvA4wHVdO7Bu7oOGguYu71zHB9KeHS2dYnS4q4Fsrm59jFdTWe/XwFubRRzgPM/FKn+woIFzLjY3VovAQB/AJc/MSkYLkUYNBxmfAXjQy+sFnztA58dL+8E1qCDL965EsaxLdJCNdokAsDbNiq1+UaCYcrZ+goPulbCoA7QGJIJkfUkm7MU7Mq5g8GanXNDAJJ95me8FRexfRncLsPZx3qV7k4MSAL3DsODj0yMurRRldYtE1FaXe3Bg8KkHQpKgDEe9bq8fChrQAPmQRN6NRRdDzcl9/q6OAIpGe8cX3OoBEQr458j5bCPEAd4zIhuUM5DUMqMsB2aEGGdu4TZ/r/C5tLFzvdcON1eQycNofYyD00UgZMVi1fpcMPhnpc8Mxa2dt6FUBdy47GOUP5uned+viAdOj+IkuFnzKCfQMVzcLbgk+OtWHu2kUulaD8SYReRC8XVbx/8D8JoDileMdq+iOAneORXFktPWtHdlRmy+7/VjPk/n7vh3nGmK69swc9cRxbdi6urWcN8g9+Cc5ID9L+Nn8qxGcSifg3UHaF8eX7fh5fnKguaenPCzw5xPVctiIBSId7oFVcciYzdCjFkjvTRjbi6W5uaO/fnnM4A3mIsF+5CRBHeO5QBcNdeYxoqlInB6sISS6e5Wf3hk1G3rAh+4sYahbSoKF1cNK5BG7KbnktPUNtaDCfxv60G5DW+kcsf1YAPG9aByPXgSrgcnrgfB9SAiHM4RwvUguB5EpQPXg0fhenDjelCdCtwfNOH+4MT9QXB/ULk/uHF/cC/cH9zCEtwfVO4PgvuDwvNi8LwYPC9Wnhdvh9UCz4tRlk48L5ZmCZ4Xm/C8WHheDJ4XI4OB9weV9wfB+4PK+4Pg/UHw/iB4fxC8PwjeH9x4f/AszCcR5pOA+SQwYT4JmE8ifWwU5pOA+SQuzCcB80mkcYH5JCbML55wKcwnmZhPAuaTIMLhHCHMJwHzSVDpwHySozCfZGM+iToVmE9iwnySifkkYD6JMp9kYz7JXphPsoUlmE+i/2E+yW+Nttse6TuuYgAAAABJRU5ErkJggg==","f_rs":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAACACAYAAAB5sSvuAAADIElEQVR4nO1ZS44TMRQsWkayJRYTiQtwEE7AeVjNmVizmw0H4AhskFhmg2RLWGL0bD/3c6edpAnLKmkm7fhXfr+2Km+e3j/9PfkTYopISBB4oD1hbee1nXICpJ0BuPZn+u04D3+57s5YWeP58zNevr3g08cP+PL1O378/IVFyOmACzLbhTopvw5283GVUD1MIarzr+AUKh/l4GKOg1XKCTeb2u90wwtizrTbYSst0zexdN9HODSPNBNg0QneefiJu3RwmSjW27NE3pA9irZmSja4hKC37E965nUTmWQIlXGzDRRqrd5eY/AqedOnuzh5CjIze6R0vhg4bKjJcdWtDYOFa6J0TxyAqwsHicbiPrGWuLqYWlyqcdk2Kq1b8ZRNPO30TWGTsz0v8i+K5XosmljbJIg51v6zRQn00WaT4BgQ/8Rh9FJP6ocMUgttNxB4/cocoqMfItW+XrrauBslRhDehqG9aODKgmHjIi2wQ5zpc2olx6Lz3RBSondkd4zNgu3wSwngFm9RPrXWCZIumi4zWslms/rmIDUxViuXuddIZiCEMGT+Ihlc3ibFvdXVhVQvK5XeYK17YhAmjm1puuZm8eQ7LXP108UyISI44NyK5PDmaO/TgdCeBd0kkW68PbZIv9V7zYI6WYj2wNaqvjldte4k4PMOOdt3gKRdY9GH6oaEk6SpCeotoX96kxyA72WiJYkkSHChXYuqm4tLteQIyXZrkcm2fMC6d8dq/VrWa+v1ujmGg7p4d8I9JfX/wzuPczwPluR90IsZeB/MvA9OwfugBe+D4H0QvA+u4H0QvA+O4H3QgvpgHuxBfbCD+qCC+mCmPjgF9UEL6oPJmoP6YAX1wUdAfRD8vdjx9+LDoD5oQX0Q1AdBfXAF9UFQHxxBfdCC+mAe7EF9sIP6oIL6YKY+OAX1QQvqg8mag/pgBfXBR0B9ENQHHfXBw6A+aEF9ENQHQX1wBfVBUB8cQX3QgvpgHuxBfbCD+qCC+mCmPjgF9UEL6oPJmoP6YAX1wUdAfRDUBx31wcOgPmhBfRDUB0F9cAX1QVAfxICJPvgKdjFbx2lo7k0AAAAASUVORK5CYII=","f_ld":"data:image/png;base64,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","f_md":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAAAwCAYAAADZ9HK+AAADsUlEQVR4nO1cQaobMQx9E6bgQBcT+Itsu2uv02t8eoTeoPfq7l+jiy5+F4EYGkiRLNmyJ/nQrKqO9CmTGfvJ5fGQZdkz0/F4vEJtBnCR33SdgXzJSHPiR/SbLCGVvqMFHt7423HHS0bOuYDUgQ4g9+xI/tiR9g08PPO3Y5UY9WS6ow5yn1Lie1aRUR31476Bh2f+pmVZrtRAHVQlGjo4XMwJ+xk4k3N1xKrioWqoCXxyyd+kOQCHEKsaO5/IQOwgpdZXBgg83PI3HZ+OHAH4H0lCgeRX5xR+RqA2f/AgRoGBh0v+SgTQTsZs9thURCPQs4xMTnReCTy88rfjBnViskieS1RhaqogHVgHDTy88lcEIE4krTCAXlG1X15nlYGHS/5W5YS6RiQV5RZiWFFWTWTjfeDhjb8WAcR03qiZpK4ZVUF2vrnxHwh8csVfXQZahxpK2pqxB1E7V5QwJBqBd8dfjQAlOSjwUjBsz1U9tpasTgLvmz/ZCxBlcIGgLBPYFGDXnKoum2UGHl7565NAs3tUNxdq6FAVNSfsyIagwMMbfztNEJJmi3beSK3GXAoIps+QYAQeLvmrm0EkCooU3UrSZJldDXnYcw483PJXBGCqQ0VBpVS4KjGOVYPqKPBwyp+UgiU8kHzugXXAi/aTpCPw8MxfWQUYhZQk4Q2wttVdpsB75o9PBN2qKGnW2M0zQzGhcxZ4l/ytSsFq9bSJXjtlDZsOgXfL3/3NILPMSKwYlCtvLLwxcODhib+yChiBt0KKOCwVpLbx2B05Djy88TellK63konO2a12tXvtgYcH/koOIMuCoigJERY8TjmjwgIPr/y1I2EaTrh0aED0204ab4WXwMMbf1OaZQoYHY4hQ8vJlzunTgPvkr9dFx/s2tGCxahyVPeda5/Ae+ZvLmVD2UIcokV1xp3bWyfWAg/X/JlCUB5eHOzVRAPZ0yVrC3xyyF/VgxwX6MuM5v2ydcloHD7wcMhfiwC2XDg6t6oRJa0s8PDI3wSgnQr+GzMbC4H3y9/jAgj7L+zubmDYNiwEsHELAWzcQgAbtxDAxi0EsHELAWzc5od6PlJ8CPw/yd/8/OW5PZRtwvo2qXxMyLaXDw/qS4jmHHrg4ZG/+eX7S/3QQP2y1AzsCfRuj/PvM/KpfF9uvwd+/PyFZVmaivSDA4GHR/6mb18/Ryl4wzZ9+vjhmk/A6+kVh/cHvpI6DsdD/fDgOZ+58+HpUA8c6mtprL/Awyt/0/JU3gsIwybtD2VlHuGFT6RIAAAAAElFTkSuQmCC","f_rd":"data:image/png;base64,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","ib_lu":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAYCAYAAAD6S912AAACXElEQVR4nJVVMY4bMQycGCq4gIs1cA/IPSP3+MsznM4prkhxwG5hwCwWSDBDUpKTKgKMXWml4XCGor+8fn39/fAHNA7g8nIBGuC7Y31Zse87rBnsbHB3bdv2Dct50fu6rtrL4YejmRmMAEdgFvDt4wZ84L9HY1RGNwIeEen64ypWZFoBYPmseUMQccDhIDEBiiHfDNg/ySzAFISgcO7qDJYGSKAEt3NRAyjCKWGx7640FSCjLbboG0H4I8hDmZCZR0ZtsOa3xgUKf/sZYBS5xuMIs7Z7HCRjCq8MMqiGUncw1xMzegLLVHhQTAiQh8tljdLT8z33NmpVGwqEI/QD7LC+TuAAnXRtw0xN98+9Twqk6zKP1LCzTRCjm2XeQVMmKZxaKYecOwsiWfeSSSDqCMvv1C/jDrxIQwX+j/AEKfbW63AEt4lhTzNqT25a6eZ6KkjKUKkGqD1dAJ47lXM6KOvHoefrGOBKs+qvjJQ8wTgKeyoFgkjoYpVPJZ11OEzzUeS5dupiT6MOhYPxLAPiqsZ6z+CoYNJwLD490+VKsW5Ilyhbls3aCrB8KnHnAOlkB1FZTcaUFFUNDdNNmQtbzgyxdWByWm2r9EW0r371qpTYnS/rJUpHmjy7PAvfO/g9NO3f2G22uvBtwdu3N2z3LYCpV6b4iA4Y7WyqiErTyn1OLwb8kj4b3r+/Y10N16mp9OhcY3P17I0ESpZinX101GHpMYFVm5/nC/VNqQWWDMusNt9mfSgHU5usOrj91QsnoH4B1LFLCxMG9ntuoODTgSrmcYOinNb+9xqF/wfe42YwhNh78gAAAABJRU5ErkJggg==","ib_mu":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAAAcCAYAAADRJblSAAADF0lEQVR4nOWYTW7jMAyFaUEDKEAXWmThI0wLDNDe/w6dq2RRoAbGQAZ8ImlaTVdDrkZtYseWPjkv/JOWt9e3+7ZvxK3hnWjb6dRaPc5xjz/v4/rmjny91UaRPErmL0R0p/+4FVb0UWutDeVEUd+Pz+0z93H3o3nZ/MoDYVbbMCu0XYCbA/OgveEebG8/XoBxn+2YLIpnXzqJv6zXdcQA8QkGWwf1H1XOTahHjHV9e+sUyZuP0fyFBQBo30ZQkSCjwaaRHFlZBJVxvn3INQCPMfZgYbxc/rJe+x3GJKaxsV141Z1/zWZnZtrErNAfhDAe+iTyF1iAYtVU2H9EyUdNTc5PoA/D4yJ59qWS+AWqSIC0SMnK82SzqtJ4IsDmaMugYF42vyrAoiU9KCJYvY9hiiK/mRx+CfFJ/SUied7nM/hFFUJ1xCopnJs+gK+m9FdwpjT7YCQvm18A4X9WyZWUGKjKVWdSzvyGz43oij+OtsG8bH7BzTZVSFpRtbMvQX1OJ1KIIPCQMy19mEBeNr/AlJz5WL6Fr8jAqQy1aOurNZE6mpfNLzh1fqFqDaXOacUirXu1J5nEUkwsL5u/9N7v5ltTGrHU4aorVdjysA9AZqKBvGT+sq6jELKmKUT9a4qwvvJiLW/iY4cfTrnpH3mnWj+BXy7tclop+c6HIUlAsvpb+zXqvZ8eLpqXza/rup4VdcqiTTlY711+EH3+IboQ0ed3/QJ42fz68uvlS+dj4fBJVC9H9HQbDtDcT6Qmq0vVIF42v77/fjcWkolWWxp1peRUX0RgmfbkkH6w3NQkHchL5i/PP5/vpuCUW3Vz0TYdJ2W/bdG8RH7x0iCaElF/6gbSygk5dn+QU/Wzb5G8ZH4xRWVfjU3ndrudzUpKzNMKjV+6GPEPG81L5hc919SBHVX1M5iQKinF4xSFUX+Lr7lyPYyXzS/qN7aj4pQbBYMrQqSMHPfE5OShEHQAj+Vl8+u4KGpi09DtwWt5CRWP9ZhFXzVJ8as5Iofwai6/cOf12r8WGCqM7Z7IZGPNOVRV0/MpKJqXzP8L+GIR9aQjezsAAAAASUVORK5CYII=","ib_ru":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAYCAYAAAD6S912AAACl0lEQVR4nJ1VsYrbQBAdmy1GoEKGK+wicAYX54NArkhjyJcH7jeuSRk4FQarMOwWAof3Zma1CqmiO2O0O/vmzZu3483xdHyoqGivMk2TaFIZnlTG35NkEZGSpes7ud2zaMKCiMwih/1BCv7uRVSVy/jeiMhD/uM5v5wrSCmFH0kiG1U1QGSfLRhMyuxrBf+lMmtBjqcj18jQYzf7/f7RJZE8C4PqZgBgfS6UAuuUBYD3iUnPpzPl4t44yRbnAiyeTjt+EAQw7I3TtACT1cD9j18fInOR6WqJyJAgYAktEIxDqGA2XcjcgSp7f4rr9/btjXtbBkTJ0KfXCgQt2fV+cPGWZKGl9kqwy48L95KhRDN0ZQNs4L3VlA1aNVDJ8DbdqC8ZtvohAOUHc7JwpvWZ1+VqjzMdv7dtlmhChlXwHpp551cOcKtpUxW6nAiCsjyzedACwk4stakiSrZGFRmGwc4M0DCMSUCzcDAhmPxldtbaNK8sPkXMtjWvcNEDwzahVQMcuu+gL5LPXuUMwNAiWh0JGhnWjVjezWql2my6F9OwHgp9mm5WbhEX++nfiRN0c1lM6NoclZJMo1XSJjmSqd+gPGfGJVoigFqdaGsDXYzuujY+VLccZiZu1Laq7drVYB8KtSleyWKXxQ1Dbx1A+enwfFjNuerLRj9OdJxIKuM4EsCGiHDNLoVVkS7fLyuLtBpxzjXl4Xn9+rquSEy/z+uNMen953tlMuD6RNfwPuBa+fCIQetq36CbV3X4cpDj89Gb4tl4ONi5Lz+vhddPizJpvmeR3uJh6uh0zpksc8myjdazIidHFrQKf/fMHqKye9otNkKi3hq024GrTfl6U6gHBqgPTTywQjUw/uI3pw6MRccOZ3uVP0Fqj0Adzr5HAAAAAElFTkSuQmCC","ib_ls":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAABACAYAAAAallfsAAACV0lEQVR4nO1XOW4jMRAsDxi0AAVUZv9g/f/HeJ/gYIFhMIA6GGAX1QdJyY42NQkJnOHRR1U3e/jy/uv978fvD9Ra8fb6hrmpKkTkYQwF0EMh1xg/fSyfN276MhGNm/R8Enp2bYACUqaxEyj3fCmcFCjUel/EHS7UFNA69lQwGSChUEWx3erQbtZQGLcV/sOCcMIEUNBpemIPwotwORdTkFlIa87wKP5yHZg6FC7I16n1rfncluBSUE5yMcfNFbqpaVUFQqG7r91986QApf1pg4TAq2P0zG7MJY81FaYRIiiYCOyMP79PBJirYU26LSLmUWsN21OU+aZDg6BgMAS4F4PlZJ+tHc2EbjBWI2yCOuuVQhP0EYtOVOCdMDHQOdcUpbsVC791na4dLpgmVrp3DJbVLHVPtoeNOZn4sM2ZwrAy60JYMF7rYHr7wmbmcEnsHjGs12qC9rbbs9TBOq3fOntTTOU7scnDwHASBnAzeC7l4ta21mPQMyWFT+S4q6O/hwXMBq7bj324I4xdQ9AEl34MpbAjF/LnmF2uI974frvewgg4rsyyUF7mXDZ2M94i4m0TBWMijPCEMm/OMue3PQYZmGnFnGqcHceXHyCdYVocFuW+chPgcxrwbrI2Uy3i9K53IySDX6jENnlmjThMdhMC5if/SVZYfREXZpZFVJB5DezLd6mXzUOFaAkQZyIfH2pKmU7sVVOwagpWTcGqKVg1BT+0pmxe88d3YP9UowIT7jW4f1FMdTm1y/QB+gMxLKsuY931Rlt3PV13PWvrrod118P/1JR/Y/YZdYKbZSwAAAAASUVORK5CYII=","ib_rs":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAABACAYAAAAallfsAAACqUlEQVR4nO1XsYrcMBB9WVzI4EKCC+yW+YPc/X+dJpBfSLlXHFjFgqYwJLynGdl3pEp71mLWlqyZN2/eaPCX5+/PfwDANgM2IE1ANUNOCbYBmLgK2MO0hinpnvNpSTAzXJ+ueHl+wa+fPzBxIqWExBf5M+jZuh1Y7Zt5yQEdJ1+Ev2uGta54rRUTX6yPqgUNeuY9N9Pssu/mRhl35HoGcLtmzGlGXjIunFB4Colhmu7pJEJWBLwyI3Ea5BDaszoF97c7LpwgZ3phc6NBg6OjEzl4dEpiEAjH7WvR/rIUTDLChdQ54mYaouFAwRHohY405u7YzLl15JdOdOeD4ci4wzBy6xkeKgjnpChnOW+toVnTHnEoQ8qyGwdQa+1GA2UkgnxtQNuaHJs7mqdZirgMOcSgcXcSFITTWJcBzFpvtSOTAyF0MY/hCPlyIP8X0oam9TnPmiZCzk8SprLbDXEyR/iuvch2PEeIv19XkFIqgCMvySvlQ9gWovW5EHAIXiAehuLoKGgViFmv1HrYQCxDlwcaopLao3P1LlGbx7N56YdUpKsDV/kpjyyOUB1VLwT0tcmwvq1KzCVKTUkYNbx7jnBDuGGEm/lD6o5LLsr8ZYRE4j/IR5qzHd0Il0iXuWd265VDYfOSbMLzEU3IJc5DjvJUut58TiWaEubi0lmIMMotThWdKL1OwyBD6k5Nx9QoUTe63lcZ470QHrkKGR0zeX+997UQvgUdphItt37a8BLCnPMuGxc178XLo4nsI1fhaGXZkdt1p2GSKEOsji56CjP3rqfwoJnK6CnlWsYpTiB7pXy+noKp9w8b/bj/D2TsKTxwhZBlegh32yn7dr19Wg7r2Zft7Mvp7MsaZ1/mOPtyOvtyPXuKnd967fzWw/mtt53feun/vvX+AoxewymeMkUNAAAAAElFTkSuQmCC","ib_ld":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAYCAYAAAD6S912AAACl0lEQVR4nF1Vy2rkMBDsMTr0gA8S7CEDe1hDLvmFwP7/TyzkuHsIWAeDGlYwofoh2XGYGdtSt6qqqzu37XV7fvz5oJwzlVyImfWDS0T0lzoRJf/gnq737DG1Vlos1BcSkXShelRNhmdNHsk02N912xsXYnhlSpQ8JYLXDFgWLEJCCBT9YA2HGGj82j5mJjnwUqiK0DJoyTeKp0uABkGeJGdWNJzYDsGhANaJlkvgWLQkllyGpggaKINyh1T2HtdyQQMKllk3mXZXDTOod6G97sTkB4Ce71lioyqGk3CyPytNoD3sHkBRSWy4p7slYYtHLP4G5cx5LujitEZzaWu1Q/djH6TYKx4ME8QNhIE29MIKKN1XS6wVFaGyFmMADQ+4w21EQovyU+RWflucydWLzmsUTA1lb1kRmo5Av+xeHRhTg1Q3t4RunAYOOUaFgdgRRYGWEqK6NcIh2inhSdcS71DdsEq4QfzQvJ6KEsKGtyO7Bp5sdee7aYk0UZA4QH14CjA6TgFahtFPKG3Nzey2wmCJZliiyko1hkGPNjOErbdpfC0WK70xJGTSSlLtAd/YjAY3u0R3CD1yma04WtTWJdrPLZWiSpFUafl8E58y9dMcENSbNNVSE63uV5cpjcZ3cUGl6jiyYCQbAxQz79QZemgVknQuyrdRNTwoZ+9ZYgwGhGF8GU26DGAwmvPQzWqIXHwg/oEAppef6HXTTnXWwUpmn060g1VH3uhf9tHENu/0mEPon/8r+PtJVLxnMUjU5MduWhKmTwwH5/54eVApRe/b/3axAk57OBLd71XY8jZ6OIDdtl/bE/Dff79PA7tl4rAYV4FmjrU25mJoeXt7fXvGBs48qjrb0XQD7X2AbjbCTiyauqTRF/QblaZaaQeLAAAAAElFTkSuQmCC","ib_md":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAAAMCAYAAADS87vJAAABvklEQVR4nM1WQWrDMBCcGBXW4IJzDPTQQC/Jqfn/oyKoQXsIpMxKa8kuveQkgWOPvJ5xVrMrHy5flycAKBQSBHgA+ijXwjuwOR4iQIwK4UVAHaHG+OiWL2zxQMB4EpJ4DShBuihUKa+IqibKaxMsIhoLnvJzXfPt8GBBTs6b5bzJHsgrm7NJlhWSyVdD0DvfHgcmDYE/nNGt7Wg1yeLrCzCmEV5jmdXJbdYx3w4P/rBlutSI1VAhWm3XkjKGq8Ls+YoIcI939M63x4fzx/lJYE1lN0hAMYqbnexhsdrJzvHAxpqM65jP7N/gwSZcyM41s5Zp67oladNspMTWePzwWBfomG+Pw7qlmJUEInMV9NJrXyCzVMKmDud5Rlxi/3wNDp5F7jUUsgCyMpNUWHLN5XrCmmH5swfnmN75fM5xmKcZ4zgipYTxfTTLjW8Zc3DOH+AqmN12HZYj/aTK0wOfOyJs+XzOcbhers1eWuvJO6nbyId313VlckTuyZqAMFZRTRiJX+XzFXzh/fBIYIqOcvyXDwAOt+/bU5eYbUP78GNqyjVi9Ky7gPyVpflPnT5PxVq5Lp1QY7RG1Dtfi38B9QuURhWwnEMAAAAASUVORK5CYII=","ib_rd":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAYCAYAAAD6S912AAACt0lEQVR4nF1VwWodMQycLD7I8ApeSOH10EOghybHQL+85JpLPyY5BNaQBfvwIGVG8j4nhs0DWxqNpJFyc//7/gMJ6HtHKQW1VpgZ+qXDAMAMlgy4dPQLdI8LHwD6WTLZP/55xNPfJyxy3t1IxgEuw1M57uve0XsHugPxfgRev6+6X08ZSUxMXNyBpE4elax0LgESYK03rGWVfevt+p4MCQHCvw7ijAyG2j2YMkjXNDOyl+i2wCrQWnNgAAvmOo1DUILxLgIO5m13RgSgTce1VFvdsCCcvhZ7HDZCYBEwW/bflOXXqjMbaS8EktPUlAM4WM3p8rRL0ye/NHy9FEthJ4ez5BEgB8WQz5QBWfJjijxMfbUMK4bU9+oAYkmG0fEBcHQQDhzN2/ZNneYpkQUblVTy6KIYxoPOnHoE2vYGwUz17pOdm4VApcPpsRTeO/PxRvGOpjQ06c12D8ZMF41TGDMVFnuc4y2Yz2cIOltGOXOimmoqM4Ksp/U6GeG8vW1XoNAeAcgsB1MwA02MT8cy6B/y+SIR6S3u15IVXHcpJsuAvK4+QZYp7M9bQ0w5rxRsvHHEVHwGILOpgaUUtHdnrhrKaloMY1nQcUzFy+vLVUJK0e351beKnCN9zbJRR87ARuRPG2dqBCeEszxqyiz4++4CZw8SLyrFLekEw2S+miJt1XaPhiQHlBpYEsafFotqSLD5G6nlMurlBZ8boimJOWbafNtqw3KM00g1qM+pqpbsJsEiXWqOoK03b1o0bFErGKXWY9VrPxZTygNke3VNism+ybnXaGTvB/N0vj1fdUdW5npcT+bNYuRvGefbIkGUS/HlS4n9XLWt+T6yTA/3D1ew6VeNidRZw+327POr/ydk83mRPP97lpxu7n7dfZAJtTZo+77wTlM+o+Oq5XiP+2HLmv44/8B/rie0Fv2Pw7wAAAAASUVORK5CYII=","tile_a":"data:image/png;base64,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","btn":"data:image/png;base64,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","btn_f":"data:image/png;base64,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","btn_p":"data:image/png;base64,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","btn_d":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEwAAAAYCAYAAABQiBvKAAADr0lEQVR4nN1ZPdLiMAw131BABx0tx6Cl5Bq0HAOOQMkRuAItHXRQUlKSLul2RwyPeXlITmApdr43kyGxZVmS9WObTkopjUajP+mLqKoq9Xq9bF+O5h3+0fun8uXGFEXR6ZixptNpms/n90YDC4Bv7csZwpATCDQKVVx5vgMew+9lWWblsDaP/ng8pt1ul7r2YcZaLBZvC/UbES3ObDa7/94Nxthut+5gey9ldXIrr6FiUK8BP7T1+/17G3/fbrfn2HfnAMBHeTRFhbWbI43H4ydNV4212WxcRm3DomoZRmx8RVEUNeE/yTc6BovRBKYzOSaTSdrv92kwGNzbfrxBh8OhJmwU654XRsqpsCYYHh6vfD8tDJhD59d5Pd2s73K5uDx/PKXNyyCs9lWOUtqm4atC4x0PG4efCKokGwZ8MIcaCDJE3oZ2y+sezxcPs471et3aCIacV+kYbjMlvDwEnlgwL19GlS/nYZgP75Hs1m9h6KFmMBVMw6If5AHQWWJV188pZO1I7vawRz/2PY2LgrFtcqx6OMbnZON53CqZy1EGzwi8WpFRuV1p+J2FzOUxDTuWg8G8h8PhS3XWCs181OOfBvOMo4I3VZhScgMbNjI+FIgQGV8NyN4AA9qv8bd283zPmBw5PB94eJW65mG6L2JlWPhKqmGU4DVPmAJt8hCHJ+bVX+Vj9Ern7R29UNRxnny1pI/NIbtoLl8MH4pznvK2CTouMi4r4IWDekA0D/P3Cg7z0ohQY7GR3KQfnSOb3NgQrbonPAvcZiOpUK/V0PFoGW0qam5bUwtJVKWmI08beInU27watAAobeSdGj6qpEWORQNyHCKJc1UkG3Kv6ns3GJdvzyCeuyq038sJmodyIaP8ojwZ7c/YS4zX9XqtFQaPNxehaI/oHo2YkRfrpSibyxvc5wmc2xJAcfRrLoy2HTxGD+8oJN58MFDutPFiMBPkdDpl3b8vgnt96u4QXouEd1TRygbBoQTnMXwzDfPhUDQgRCNdjNbmtPO0F5K1syQYLZfLF8tq0u45yR90UelmAyuNVlwGK6ynCTWwgkNM59eFxq/14SypXtb1JsThm6GTVJmr4UgYCMALFHmqzu0tkI5XOfnoxWM53HT7gnY7S3o3NbUquVqt7H4/fYrqgyvtbyC3eE2IqjdfTTNqRyO7A4rugf5n9P7hsrHtfwE1g53P52R/hEQTRh5TyWrqUSK6usnh09tV72bhHZ5NNPC0zoP4q3+zpV+Kqqo6fwE+2gUDVvXHdwAAAABJRU5ErkJggg==","tab_on":"data:image/png;base64,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","tab_off":"data:image/png;base64,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","stab_on":"data:image/png;base64,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","stab_off":"data:image/png;base64,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","chk_on":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABrklEQVR4nIWSIXDiQBSGvzKIxSWOle9c4haJpA4cyMpKKnGHLO7qrq5I6q7yJDK4xCXuIoNLHOt6s8s0pb2j/DM7b3b+ff97+95/JSKvXEBd14Rh6OMbZqHiKdJ03WWz2ZDnuSeapiEIAnq9HlVVobX28RSmKhllW4bb7CjgklerFYfD4VIzLAfCyDZM0pIMReeUdFW/wuNAmAO/84KtBQUfBb4SuYuFKVCmO2Z70IEG9amDcyLLWPiuwBY7BnsYT6eo0NWHjgtS7IiU8i2dirgzCUPmjrANgxJCERaLRTvwrgXiMueXKAqrWNeWbWPR0scAP7yq5S4tqJRiZEy7Md8BwBzNOskwCn7qgDzqM1VvyVCkGesGBsZ4P8Rx/C5Q1zUiwr1VPCZZS7hpe1QlEzc0Efoi/8yr4xSdWXpas2jgJd2d0JbrYo+z0Xg8/u+GOqf2lCjiZg8vyVFklWQkFm5ub30R59DP6LbJ0kckxhjD7PmZP+mO+wYiY/wXHVy3ZwWMGbZVXPz28EAkwnK59PdzuAqC4HU4HFKW5QfCuv3izXYWRVEcBc49cEa5hL/uUZum7RnuPgAAAABJRU5ErkJggg==","chk_off":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA6UlEQVR4nJVTMRKEIAyMDAV20B1lWjrbe4Z/8il+w9In2FpaQmd5N4mDw3Cg3s4ogtlNWEKDiB+4gfcejDE85pD0GscRlmXhhRACaK2hbVvYtg2stTzmmKYJ5nk+BIg8DAPs+35XDDiHoJSBdV15LtKflPWOjOig7/tzTeRBNZFIziFKwblIjUyQ0bgrkZzs3DEnnqQPcj0H4gtqiCd2biEUKrhCrIC34AvNQdlj2UopfmpJJHVYiYyIP8ElEZFWcEWmRCWv5BNyKlIV6Lo3933MQkaR26lhJbAAXYzY2/+i0VpXr/OT4/0CQTBSHoUffnsAAAAASUVORK5CYII=","scr_bar":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAT0lEQVR4nGNkYGD4v3dVD0NKUQsDsUCAh4OhpamEwTushIGJgUzAAaWZyDXgB6UGMAwuA35QagAHpQYwDD0D/gx0LPxAN4B08APujYGPBQDocw3/Ovl4qgAAAABJRU5ErkJggg==","scr_btn":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAArklEQVR4nL2TMQ7DIAxFf1AGjhBGRsaMXRmb63Ts2jHHKSNrj5AxY3MLVyYLIRQJUfUNtkCyv21MB4DQQM+GiLBtHsNgg495rwuUNsHH+KfD7eHQ7fGE+T5VKfvXAudXCD6kqtUtpJm/oaSEGXU5AWMvBjnsdA29xwg0ItikE65OoLT5TwUqIyTQSH9SkTJMO6fOmwrM5QRm1Ken2uG7YzDzmxZYsbSBJcJnaqngA2vkOCc5y4XSAAAAAElFTkSuQmCC","scr_btn_f":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAg0lEQVR4nGNkYGD4z0ABYAIR////x4OfI9EIfO9YMdgAFphJ94+XkGTz1CnbEC6gBLDgMhkbUJTkYPAKdsJvAAhk53gxYAOKliUM94/3oIgxMVAImCDUC0oNkKCXCyRwGUA+YMEWVaDQxgQSxBngFeyEEVX4AHW8ALIRXwrEBxgpzc4AR0lABVsQ+3gAAAAASUVORK5CYII=","close":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA/UlEQVR4nJ1TLRuCMBC+8SwQoWlcJGo0GvEnGInapFkx2uRnEDXuLxCJRIxE2nwOPRyDPaBvud1t73sfHAwAQCml0Da1BBvKMu/5MpNwvDwYR/Ju7cOvEMKHhecqTlmDQMwmR/Ee0iRtz9z1tprqcpJcllXPd8y+D8kdovg0GesEwECRX9uBEQEtxb6VruwCcZR8Sn2LEJHidGcVCMNN+xiz4EO06GN8VgWITGZdFrTo2+CYCzJWtj6TgYDQyqHHRKZ29LgJbl4QgXrWRfQ5dALQy151G6kvzFhsIIDrSaAvYPrUrr697HYOVVEUo/1NIZMVMDzgX/WPwLNu2AtrH4cSO3iozAAAAABJRU5ErkJggg==","close_f":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA5klEQVR4nGPg4OBg+E8UeI6Cnx8r/s/AwMDA8v379/85wUoMpAInIwkGAQGG/ywwAS8nQ6I1e2VPZVjXGgRmsyBLGBkpEtR87tx9FD4TugIJyx4wJiSG0wAGhhdgDNMAoSFiSEbiNiAn2ApuEEIzsjjMEhwG1JQEQRVLQBVKgPkgcaJcAAJT1t5DsuUFlI8dMKH6DdnP2LyD1QAJNCGEZoR3EOLogAVdAqYB5mdkQ1DDAW4AAxyAEgksRSInGGxiGAaAkicCwGIAnY/uXQYGlhfHe8AZA5a2SQWMIAKUq8jR/OEDAyMAYHuCrH1ZQH4AAAAASUVORK5CYII=","bar":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAPElEQVR4nO3QwQkAMAxCUVOykJD9V2vpBJ48xTeAwi8OL4wKgPXgOMe/HEhJJCWRlERSEklJtCBRc2g9eBySA1vt8mGhAAAAAElFTkSuQmCC","bar_l":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAYCAYAAADd5VyeAAAAKklEQVR4nGM0NDH8z4AEWEDE+TPn4QJMyLIgMCqACqgRHuBQNzQxhAsAAFOOBMkPiNk6AAAAAElFTkSuQmCC","bar_r":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAYCAYAAADd5VyeAAAAKUlEQVR4nGM0NDH8z4AEGBkYGOAChiaGDEwMaIBpVAAFUCM8WEAhjQwADjsD8cufiY8AAAAASUVORK5CYII=","bars":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAARklEQVR4nGM0NDH8z0BDwMjAwEBTC1j+bwpiGNI+YKKl4SAwagFBMBpEBMFoEBEEo0FEEIwG0cAHEcuQrzJZDE0MaWk+AwDWbAlhSoQhDgAAAABJRU5ErkJggg==","bars_l":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAYCAYAAADd5VyeAAAAPElEQVR4nGM0NDH8z4AEWEDE+TPnUQVA4P+mIDDNxIAEGP3WoQqAwKgAKkAJD3AwQkMdjsGBbGhiCFcFAEM8Dl716rRpAAAAAElFTkSuQmCC","bars_r":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAYCAYAAADd5VyeAAAAPElEQVR4nGM0NDH8z4AEGBkYGOAChiaGDEz/NwUxgDAMMDH6rUPWwcCEwmMYFWBADw/k4MMayCwgAhkAAMuMDIuVXyKyAAAAAElFTkSuQmCC","tw_normal":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACLElEQVR4nI2SIXTaUBSGv1Q9XOKI48lXlzniiIxsp4IrUxTXuYEqU6Oup6pnaqA6ZNzAgWpRNG6Je3GJGs9lB7qxnTPY9rv7zv9/795zr8URPUReNdMFZQm2DXfzzDrkOzkWDjqXjMYzXBt8dcp1qKr/AjxEXpUagZCKj71z0tKQ5hpdbOi2Gn9ArEPU9cN1FU9ilOezSlPS5IlQOryerKyjHTxeNXf0b1/X1Woao5o+fjvCUwqpXpEbw/qqtfPcRi/ePeBTN6yWeht+rCb9N8iwjX9+wU1/wHw+4ywM0EIy1yXrD1HVdH9BrG04DMOXmQd9GkFAcNbhba9DpoZQJJzVFgSeZDSdcUrJRRSRL2NibX6McNrchbUBP4wY9Hpkqs9txwVH0v9cshEOw+shi0JgRI16dIktwOo2G5V0XfKiRJeAEHTaAb2xYFMajE4RLoSqINMlAqiLAl9K4lXOievUqJmSuisJPXubJ3nW3LfBbAqErDOK6jiiRsOxiTwXTI3ZKsWYDSeDOLEKBJPZAm0EgRQ8ZymLZ82Xvsti5JPrksJsuAwVy0wzTVIrLQzTJLP2e71qqepmnlj3F2ElRcF4ZcjLgoaUmE1JJ/AYL2fcxZnVatSreZZbRw/pXehV0hY86ZIk36BsB8eB9/FfDumnui1VSSGIojbDUFHbLskVjBfJ7ud/Au7miZUUJdPpGFyFsOEp1Ujb3rf9uw6OsFXkNSpdmH19KLx9/w42mQiDjCz/tgAAAABJRU5ErkJggg==","tw_champion":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABdUlEQVR4nHVTIVDDQBDc70QUlzhwjQwuRBUUyNZh6xgkEhR1LaqVDApwsVVQiYMqiIxMHXGJIy7Mfsjn8zQ7k8nf//3e3d69QAdeTv0yzjO53mQFVttU7PLrdRGMlzNMXBee7cDe63e5wdKNhT8olRFt0HV2E23FvwwW/qB03xO5ZmQTzISgz4XXkFm6U3JSpXwwOpZ2mFSExJFjy/8qaJNbusHIvPwarkEBKV6NryxvSNJKXEJQbQqmavaHWF5eIfIK3IZzuXU3mcKP+7h+vG9pw0CCtes1M21GniVzHMJDmE3xsUqRzjMMnT5MX6tObxfqy/lbk7LpK84H+6Xe5/ynkJFYgn3mqMssgZmZvqI29FIYRReRhOwORazP6lnotVJOEqU2BeNFfiTiHs/ZgbhpDhQBNzkkZJd1RpvWKMvIBTD6bGaDUHPwHG8FAldOWJxmGBuC1r1fB27laxIokj88Ac27MM52ZmCCQ/KQfMt191sEfgFIH8CZR4376wAAAABJRU5ErkJggg==","tw_giant":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACFklEQVR4nIWTIVDbYBiGn3ITPy64xBGZudYFF3CZ61AdqkxRGaYCCqYKrnMdikOVqi2uraIoqOrVkaqlqq2iv/t2f7Md3NEen8h/l7zvc//3fl8KrKlGjJhzNoO5hssrCqt0G+vM5dCiFnfQgOvAWZQD3wWcRcgCcLyI/s0e2RgWWpFlUA7eQgqrqDKty/nJN7KJQmuNUjCZQbu3Wr+sqJrT5flaTAvDliXPzy2ZDkOJK0hUYfneaI4qLzfZMA/zoVgy5pZcnB4QFC3csMn+3j7fTxPCSgBzsF34c4fs7lgv7TRiZPrgiTHXI+ShZcl02pJKgEztJ2mqhjQjZPjLl7KPXNcReQrEgAxkY0lxO5wc77Nl2bg7txx8+sr55hD9CLtxwM9Ln3QEtZrPjyvA+oyzc7e0FqplJZNMY20pLKUYZxrbUTjtCkVVoqv7DBjg+AMeU9hUEB9v074d5xlMZhrPgzCw+OhZLLTGtTTFesKNbjMixQ0GuK5FyYWHfpVud4LJTGv4kOSjEWPUek7tUJEkmmw+plLfxHNHJN1tevdjGo2Agy9XpBMKCiS5fzXW8F+qpqVOEwmKyNmRLfU4D+/uGgn9XPNfu7aqZSVPHXtp9L18/mYPVmnfrLKhl0PFQh1ycW7jufA4gqRPwdzqXYDJpJ1o0sElVvE3aQaOrbC3kN7g7Sqv3W3ThjnTzPyP0Hsd2Kv6C+mZBw9YTJk+AAAAAElFTkSuQmCC","tw_party":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACvUlEQVR4nJ2Sy2sTURSHvztJJo+ZpEkfSYxNbWsfKgqtKOILRURRRDe60KUIQkHEv0BB1y504VoXiqJgdSciggurtrqx2pettlWbtEmaV5tMkrmSETpr/cE993LgfJzfORe32y2B/zoutyJF/VGVksUKDBfhRBAG05Az4EAYhpMmpqowmjA53KYwmzYJ+BRuvF5g6PQ6LMC4IdkzcIumeCsOr87ir9+EYnEKvmYckTjplw/Roh1IaeAIRajNT2J8ekHu1T0UgB8rEO7ZRGpuHk9bLxsPHsMwJYWPr1B/T9HS0Y35cxxXeAPV0SFOH9qN8DfVS3HWQ6cOyYkx1ENnmX35AF9vH+mJUSJ9e5m+foY1Dd60ru87+3G29tiAL0um1b6mrGDuP0I+m6f4/CbTz0HRguANINwayBrC34zX64NSyQZE/ArzUzM0NHVRTM6TuzOA8Ojg1lAiHQinC+HREKoPPDot8VaqS3MWQKmH8SUTLRbHn5qyii3pIatIShO0EPLvvBGlPA16CEdz1AaoXoXC3Lc1q0JrhFoVWcxAPoU5PQKFDNJYxSwVKVcNhFBsC2EVGvYeZ+LaKSspi2kowqXHw5SNClJx0KhrZHI58uUKwuWiujBjA1IVqGUSax1cvP8Wv7eR12Nf+PrhPdHNWykX8mRmJolu287lrhjOcIdtYbUCrs37rMT5+0OMjE1w98lTzIpBe2c7y59HcApJbH2EYCRKUBXUckkbUC5DQ+Iz524PMvjwEYlvkwS6uvkx8o7+3j5Cuw4TiMVJ/1pgObHA4nIBWSraFtoD8P39G7ovXGHnyRayqRQ7tnQzGw7Q2hbkqK9KTzxMtr+LTt1Jk0cBr/534PWZBc9dRWaToPpwNEYQUqFW34A0kbkUIhhFlgrWVoTbh1zNI7Qg2We3EKpwSkNW7e/6D3KEdf4AbDUgueYVxywAAAAASUVORK5CYII=","tw_elite":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABqUlEQVR4nH2TLVDDUBCEvzCIgAJHUQQXHFQhqQUFLqBoXHGpAxySOiR1DI4qQLYKUFDFxDWuwRXVqXvMXfJCyAA3k8n72bvb7G0c8ogCDKXo3OKU9//eRwHGjPziqYILzPRV78dPFJg5WVxev9L1nnAmEWftmD/j40hxq+417gyCbcy8vQgnEfT6um019WUsTWkiZ0kSE056BS79BC2QpjGnnVAPn2O48HxaTWWiNCXZ83wauzGnfoar+UAMjtCQShIH+99skwQ67jT7/tmiFnnMGnPXy961JX4qveNjtjZzld0pQbRA/AjDlwcidw/Py5IH8c88qkU4nprg3ZiRGRmOjSEYG/bvf53OfPVAGAzIOq93POgf4i77UAPcKhrmyhur9s6Lo7SZpUXydnKuOlRZOOWDIFhja2OZJBnSPIGBf487G2py9yqbBCs3tMO64t+GeQExknhBQkZlp2HVLu/7DzI/tFCjXs8/IXeYOLEMFrXlsYWEhcXZhoUG4du3w6qjkrX4QnxgceJK1cCKJzNO899A3FidtWDE/+rAUpMCpPMvRbXAX/dfjNzc5H0xqDQAAAAASUVORK5CYII=","tw_unique":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAABj0lEQVR4nKVTLXPCQBTcZCqQxYEjMjgkOIKLTB3gcCCpa/sPkIVfkOJAxnVQBEdkZHAgUQzuOvvK3Rwprjtzucu7fV97dw4eoB2Nled3UOSpsRXFAacsccpclx+/Gyk62eRJkMrMMZsA52Nxl4A+JkCR56h7TcQXpaLpp2Kml9cDpvsQfghwfT3lDvfIIZc+d4gvStDdKolcqflSFWeORxxTAbH+mCNIgep6jlorVM91D1m6kT2uabM5Gg6z2AKRGPbHyHeJ9E94XgN+O0SyXBie9nOp9mrWEIMulc5pFOCYVWRM1juxEeQwCYUlXB4VRYpWTbQ6XVFbMg+XQNw3pdLGSgiKSx8JgBuS98T0bDBcYoS9+dX75OpgLiOzhTwBruejCMbNLxQyAlSNDtwjh1zdwhM/vcFGzvmWSFEw6lwWsSgWzOKcsgS9wa9eBvqScKZIHPoO6H+bgzLi/1wkEsuXhP3yZNojT9aEzbHfjjwmnUUH3H6PVf8tliq4th3I1Y/pz/Mk2G/ZxvthCW3wA7aQMlDatplDAAAAAElFTkSuQmCC","ic_attack":"data:image/png;base64,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","ic_recovery":"data:image/png;base64,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","ic_sit":"data:image/png;base64,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","ic_autoget":"data:image/png;base64,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"};
-const LEAN_CSS = ":host{position:fixed;right:18px;top:90px;width:450px;z-index:2147483646;font:12px/1.3 Arial,Helvetica,sans-serif;color:#efdaa4;color-scheme:dark;text-shadow:1px 1px #000}\n*{box-sizing:border-box} [hidden]{display:none!important}\n.panel{position:relative;padding-bottom:19px;background:rgba(15,19,17,.96);box-shadow:0 8px 28px #000a}\n.panel:before{content:'';position:absolute;inset:36px 14px 16px;background-image:var(--s-tile_a);opacity:.55;pointer-events:none}\n.frame{position:absolute;pointer-events:none;background-repeat:no-repeat}\n.frame.lu{left:0;top:0;width:40px;height:68px;background-image:var(--s-f_lu)}\n.frame.mu{left:40px;right:40px;top:0;height:68px;background-image:var(--s-f_mu);background-repeat:repeat-x}\n.frame.ru{right:0;top:0;width:40px;height:68px;background-image:var(--s-f_ru)}\n.frame.ls{left:0;top:68px;bottom:48px;width:40px;background-image:var(--s-f_ls);background-repeat:repeat-y}\n.frame.rs{right:0;top:68px;bottom:48px;width:40px;background-image:var(--s-f_rs);background-repeat:repeat-y}\n.frame.ld{left:0;bottom:0;width:40px;height:48px;background-image:var(--s-f_ld)}\n.frame.md{left:40px;right:40px;bottom:0;height:48px;background-image:var(--s-f_md);background-repeat:repeat-x}\n.frame.rd{right:0;bottom:0;width:40px;height:48px;background-image:var(--s-f_rd)}\nheader{position:relative;z-index:1;height:34px;display:flex;align-items:center;justify-content:center;cursor:move;touch-action:none;padding:6px 32px 0;color:#fff}\n\nheader strong{font-weight:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\nheader button.fold{position:absolute;right:10px;top:10px;width:16px;min-width:16px;height:16px;padding:0;border:0;background:var(--s-close);color:transparent;font-size:0}\nheader button.fold:hover{background-image:var(--s-close_f)}\n.body{position:relative;z-index:1;margin:0 15px}\nbutton,input,select{font:12px Arial,Helvetica,sans-serif;color:inherit;text-shadow:inherit;border-radius:0}\nbutton{display:inline-flex;align-items:center;justify-content:center;min-width:52px;height:24px;padding:0 6px;cursor:pointer;white-space:nowrap;background:transparent;color:#fefbd8;border-style:solid;border-width:5px;border-image-source:var(--s-btn);border-image-slice:6 fill;border-image-width:5px;border-image-repeat:stretch;line-height:14px}\nbutton:hover{border-image-source:var(--s-btn_f);color:#fff}button:active{border-image-source:var(--s-btn_p)}button:disabled{border-image-source:var(--s-btn_d);color:#7c786c;cursor:default}\nbutton:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid #ffe08a;outline-offset:1px}\nnav,.row,.subtabs{display:flex;align-items:center;gap:5px;flex-wrap:wrap}\nnav{padding-top:4px;gap:2px}nav button{flex:1;padding:0 5px;font-size:11px}.subtabs{margin:0 0 8px;gap:2px}\nnav button,.subtabs button{height:24px;min-width:56px;padding:0 8px;color:#d8d4c4;border-width:0 6px;border-image-source:var(--s-tab_off);border-image-slice:0 8 fill;border-image-width:0 6px;line-height:23px}\nnav button[aria-selected=true],.subtabs button[aria-selected=true]{color:#fff;border-image-source:var(--s-tab_on)}\n.subtabs button{font-size:11px;min-width:48px;border-image-source:var(--s-stab_off)}\n.subtabs button[aria-selected=true]{border-image-source:var(--s-stab_on)}\n.class-tabs{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:7px}.class-tabs button{font-size:11px;gap:4px;text-transform:capitalize;flex:1;min-width:80px}.class-tabs button[aria-selected=true]{color:#ffe08a}.class-tabs i{display:inline-block;width:16px;height:16px;flex:0 0 16px;background-size:16px 16px}\n.pane,.dialog-body{padding-top:9px;max-height:clamp(220px,calc(100vh - 300px),720px);overflow:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-color:#796a48 #171711}\n.pane::-webkit-scrollbar,.dialog-body::-webkit-scrollbar{width:16px}.pane::-webkit-scrollbar-track,.dialog-body::-webkit-scrollbar-track{background-image:var(--s-scr_bar)}.pane::-webkit-scrollbar-thumb,.dialog-body::-webkit-scrollbar-thumb{background:var(--s-scr_btn) center/16px 100% no-repeat;min-height:16px}.pane::-webkit-scrollbar-thumb:hover,.dialog-body::-webkit-scrollbar-thumb:hover{background-image:var(--s-scr_btn_f)}\nfieldset{position:relative;min-width:0;border:0;margin:0 0 9px;padding:25px 10px 9px;background-color:#282728;background-image:var(--s-ib_lu),var(--s-ib_ru),var(--s-ib_ld),var(--s-ib_rd),var(--s-ib_mu),var(--s-ib_md),var(--s-ib_ls),var(--s-ib_rs);background-position:left top,right top,left bottom,right bottom,left top,left bottom,left top,right top;background-repeat:no-repeat,no-repeat,no-repeat,no-repeat,repeat-x,repeat-x,repeat-y,repeat-y}\nlegend{position:absolute;left:9px;right:9px;top:3px;padding:0;height:13px;line-height:13px;color:#ffd65a;font-weight:bold}\n.field{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0;min-height:18px}.field>span{flex:1}\ninput:not([type=checkbox]),select{height:22px;background:#080907;border:1px solid #5d5034;padding:0 4px;outline:none;min-width:0;color:#efdaa4}\ninput:focus,select:focus{border-color:#c9a85c}.field input[type=number]{width:66px;text-align:right}.field input[type=text]{width:170px}.field select{max-width:220px;min-width:110px}\ninput[type=checkbox]{appearance:none;width:16px;height:16px;flex:0 0 16px;margin:0;border:0;background:var(--s-chk_off) center/16px 16px;cursor:pointer}input[type=checkbox]:checked{background-image:var(--s-chk_on)}\n.status{padding:6px 6px 8px;white-space:pre-line;color:#f4eedc;border-bottom:1px solid #5d503455}\n.controls{padding:6px 0;gap:3px}.controls button:first-child{flex:1}\n.feedback{padding:6px 4px 0;overflow-wrap:anywhere;font-size:11px;min-height:8px}\n.muted{color:#a09b8c;font-size:11px;margin:6px 0}\n.grid{display:flex;flex-wrap:wrap;gap:5px;align-content:flex-start;margin:8px 0}\nbutton.slot,.skill-icon{position:relative;display:inline-block;flex:0 0 34px;width:34px;min-width:34px;height:34px;border:1px solid #4e4532;border-image:none;background:#050505;box-shadow:inset 0 0 0 1px #17140e;padding:0;overflow:hidden;vertical-align:middle}\nbutton.slot:hover{border-image:none;border-color:#d9b765}.slot.on{border-color:#ffe08a;box-shadow:0 0 5px 1px #ffd678a6}\n.slot img,.skill-icon img{position:absolute;inset:0;width:32px;height:32px;image-rendering:auto}\n.fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:#b1a17b}.slot[data-icon-loaded=true]>.fallback,.skill-icon[data-icon-loaded=true]>.fallback{display:none}\n.slot .cd{position:absolute;inset:0;background:conic-gradient(#000b var(--p,0%),transparent 0);pointer-events:none}\n.slot .seconds{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:bold;font-size:11px;pointer-events:none}\n.slot .order{position:absolute;left:1px;top:0;color:#ffd65a;font-size:10px;line-height:11px;pointer-events:none}\n.skill-row{display:flex;align-items:center;gap:7px;min-height:42px;padding:4px 5px;margin:3px 0;background-image:var(--s-bar_l),var(--s-bar_r),var(--s-bar);background-position:left,right,center;background-repeat:no-repeat,no-repeat,repeat-x;background-size:4px 100%,4px 100%,auto 100%}\n.skill-row:hover{background-image:var(--s-bars_l),var(--s-bars_r),var(--s-bars)}\n.skill-row .skill-info{flex:1;min-width:0}.skill-name{display:block;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.skill-detail{font-size:10px;color:#d6c794}.skill-row button.mini{min-width:22px;width:22px;padding:0;height:22px}\n.picker-title{display:flex;align-items:center;gap:6px;justify-content:space-between;margin-top:8px}.picker-title input{max-width:170px;width:50%;font-size:11px}\n.skill-tip{position:fixed;z-index:2147483647;max-width:270px;pointer-events:none;padding:9px;background:rgba(8,9,6,.97);border:1px solid #b79b5c;box-shadow:inset 0 0 0 2px #30291c,0 3px 10px #000;font-size:12px;color:#efdaa4;white-space:pre-line;text-shadow:1px 1px #000}\n.skill-tip strong{display:block;color:#fff;margin-bottom:5px}.empty{padding:10px 4px;color:#a09b8c;text-align:center}\npre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:130px;overflow:auto;overscroll-behavior:contain;margin:5px 0}\n.wardrobe-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin-bottom:8px}\n.wardrobe-item{min-width:0;height:48px;padding:4px;justify-content:flex-start;gap:6px;text-align:left;font-size:10px;white-space:normal;line-height:12px}\n.wardrobe-item>.slot{flex:0 0 34px}.wardrobe-item>span:last-child{overflow:hidden;max-height:36px;overflow-wrap:anywhere}\n.wardrobe-item[aria-pressed=true]{color:#ffe08a;outline:1px solid #ffe08a;outline-offset:-2px}\n@media(max-width:500px){:host{right:4px;top:70px;width:calc(100vw - 8px)}.body{margin:0 13px}.pane{max-height:clamp(200px,calc(100vh - 280px),720px)}.field input[type=text]{width:150px}.skill-row{gap:4px}.controls{gap:2px}}\n\n.waiting{white-space:pre-line;color:#c8d9ae;margin:4px 0}\ntextarea{width:100%;color:inherit;background:#151916;font:11px monospace}\n\n.dialog{position:fixed;width:min(430px,calc(100vw - 8px));z-index:2147483646}.dialog[hidden]{display:none}.dialog-body{max-height:min(70vh,640px);margin:0 15px}\n";
+const LEAN_CSS = ":host{position:fixed;right:18px;top:90px;width:450px;z-index:2147483646;font:12px/1.3 Arial,Helvetica,sans-serif;color:#efdaa4;color-scheme:dark;text-shadow:1px 1px #000}\n*{box-sizing:border-box} [hidden]{display:none!important}\n.panel{position:relative;padding-bottom:19px;background:rgba(15,19,17,.96);box-shadow:0 8px 28px #000a}\n.panel:before{content:'';position:absolute;inset:36px 14px 16px;background-image:var(--s-tile_a);opacity:.55;pointer-events:none}\n.frame{position:absolute;pointer-events:none;background-repeat:no-repeat}\n.frame.lu{left:0;top:0;width:40px;height:68px;background-image:var(--s-f_lu)}\n.frame.mu{left:40px;right:40px;top:0;height:68px;background-image:var(--s-f_mu);background-repeat:repeat-x}\n.frame.ru{right:0;top:0;width:40px;height:68px;background-image:var(--s-f_ru)}\n.frame.ls{left:0;top:68px;bottom:48px;width:40px;background-image:var(--s-f_ls);background-repeat:repeat-y}\n.frame.rs{right:0;top:68px;bottom:48px;width:40px;background-image:var(--s-f_rs);background-repeat:repeat-y}\n.frame.ld{left:0;bottom:0;width:40px;height:48px;background-image:var(--s-f_ld)}\n.frame.md{left:40px;right:40px;bottom:0;height:48px;background-image:var(--s-f_md);background-repeat:repeat-x}\n.frame.rd{right:0;bottom:0;width:40px;height:48px;background-image:var(--s-f_rd)}\nheader{position:relative;z-index:1;height:34px;display:flex;align-items:center;justify-content:center;cursor:move;touch-action:none;padding:6px 32px 0;color:#fff}\nheader button.update,header button.discord{height:22px;min-width:0;margin-left:8px;font-size:11px}\nheader strong{font-weight:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\nheader button.version{display:inline;height:auto;min-width:0;padding:0;border:0;background:none;color:inherit;font:inherit;line-height:inherit;text-decoration:underline dotted;text-underline-offset:3px}header button.version:hover{color:#f0d98c}\nheader button.fold{position:absolute;right:10px;top:10px;width:16px;min-width:16px;height:16px;padding:0;border:0;background:var(--s-close);color:transparent;font-size:0}\nheader button.fold:hover{background-image:var(--s-close_f)}\n.body{position:relative;z-index:1;margin:0 15px}\nbutton,input,select{font:12px Arial,Helvetica,sans-serif;color:inherit;text-shadow:inherit;border-radius:0}\nbutton{display:inline-flex;align-items:center;justify-content:center;min-width:52px;height:24px;padding:0 6px;cursor:pointer;white-space:nowrap;background:transparent;color:#fefbd8;border-style:solid;border-width:5px;border-image-source:var(--s-btn);border-image-slice:6 fill;border-image-width:5px;border-image-repeat:stretch;line-height:14px}\nbutton:hover{border-image-source:var(--s-btn_f);color:#fff}button:active{border-image-source:var(--s-btn_p)}button:disabled{border-image-source:var(--s-btn_d);color:#7c786c;cursor:default}\nbutton:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid #ffe08a;outline-offset:1px}\nnav,.row,.subtabs{display:flex;align-items:center;gap:5px;flex-wrap:wrap}\nnav{padding-top:4px;gap:2px}nav button{flex:1;padding:0 5px;font-size:11px}.subtabs{margin:0 0 8px;gap:2px}\nnav button,.subtabs button{height:24px;min-width:56px;padding:0 8px;color:#d8d4c4;border-width:0 6px;border-image-source:var(--s-tab_off);border-image-slice:0 8 fill;border-image-width:0 6px;line-height:23px}\nnav button[aria-selected=true],.subtabs button[aria-selected=true]{color:#fff;border-image-source:var(--s-tab_on)}\n.subtabs button{font-size:11px;min-width:48px;border-image-source:var(--s-stab_off)}\n.subtabs button[aria-selected=true]{border-image-source:var(--s-stab_on)}\n.class-tabs{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:7px}.class-tabs button{font-size:11px;gap:4px;text-transform:capitalize;flex:1;min-width:80px}.class-tabs button[aria-selected=true]{color:#ffe08a}.class-tabs i{display:inline-block;width:16px;height:16px;flex:0 0 16px;background-size:16px 16px}\n.pane,.dialog-body{padding-top:9px;max-height:clamp(220px,calc(100vh - 300px),720px);overflow:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-color:#796a48 #171711}\n.pane::-webkit-scrollbar,.dialog-body::-webkit-scrollbar{width:16px}.pane::-webkit-scrollbar-track,.dialog-body::-webkit-scrollbar-track{background-image:var(--s-scr_bar)}.pane::-webkit-scrollbar-thumb,.dialog-body::-webkit-scrollbar-thumb{background:var(--s-scr_btn) center/16px 100% no-repeat;min-height:16px}.pane::-webkit-scrollbar-thumb:hover,.dialog-body::-webkit-scrollbar-thumb:hover{background-image:var(--s-scr_btn_f)}\nfieldset{position:relative;min-width:0;border:0;margin:0 0 9px;padding:25px 10px 9px;background-color:#282728;background-image:var(--s-ib_lu),var(--s-ib_ru),var(--s-ib_ld),var(--s-ib_rd),var(--s-ib_mu),var(--s-ib_md),var(--s-ib_ls),var(--s-ib_rs);background-position:left top,right top,left bottom,right bottom,left top,left bottom,left top,right top;background-repeat:no-repeat,no-repeat,no-repeat,no-repeat,repeat-x,repeat-x,repeat-y,repeat-y}\nlegend{position:absolute;left:9px;right:9px;top:3px;padding:0;height:13px;line-height:13px;color:#ffd65a;font-weight:bold}\n.field{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0;min-height:18px}.field>span{flex:1}\ninput:not([type=checkbox]),select{height:22px;background:#080907;border:1px solid #5d5034;padding:0 4px;outline:none;min-width:0;color:#efdaa4}\ninput:focus,select:focus{border-color:#c9a85c}.field input[type=number]{width:66px;text-align:right}.field input[type=text]{width:170px}.field select{max-width:220px;min-width:110px}\ninput[type=checkbox]{appearance:none;width:16px;height:16px;flex:0 0 16px;margin:0;border:0;background:var(--s-chk_off) center/16px 16px;cursor:pointer}input[type=checkbox]:checked{background-image:var(--s-chk_on)}\n.status{padding:6px 6px 8px;white-space:pre-line;color:#f4eedc;border-bottom:1px solid #5d503455}\n.controls{padding:6px 0;gap:3px}.controls button:first-child{flex:1}\n.feedback{padding:6px 4px 0;overflow-wrap:anywhere;font-size:11px;min-height:8px}\n.muted{color:#a09b8c;font-size:11px;margin:6px 0}\n.grid{display:flex;flex-wrap:wrap;gap:5px;align-content:flex-start;margin:8px 0}\nbutton.slot,.skill-icon{position:relative;display:inline-block;flex:0 0 34px;width:34px;min-width:34px;height:34px;border:1px solid #4e4532;border-image:none;background:#050505;box-shadow:inset 0 0 0 1px #17140e;padding:0;overflow:hidden;vertical-align:middle}\nbutton.slot:hover{border-image:none;border-color:#d9b765}.slot.on{border-color:#ffe08a;box-shadow:0 0 5px 1px #ffd678a6}\n.slot img,.skill-icon img{position:absolute;inset:0;width:32px;height:32px;image-rendering:auto}\n.fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:#b1a17b}.slot[data-icon-loaded=true]>.fallback,.skill-icon[data-icon-loaded=true]>.fallback{display:none}\n.slot .cd{position:absolute;inset:0;background:conic-gradient(#000b var(--p,0%),transparent 0);pointer-events:none}\n.slot .seconds{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:bold;font-size:11px;pointer-events:none}\n.slot .order{position:absolute;left:1px;top:0;color:#ffd65a;font-size:10px;line-height:11px;pointer-events:none}\n.skill-row{display:flex;align-items:center;gap:7px;min-height:42px;padding:4px 5px;margin:3px 0;background-image:var(--s-bar_l),var(--s-bar_r),var(--s-bar);background-position:left,right,center;background-repeat:no-repeat,no-repeat,repeat-x;background-size:4px 100%,4px 100%,auto 100%}\n.skill-row:hover{background-image:var(--s-bars_l),var(--s-bars_r),var(--s-bars)}\n.skill-row .skill-info{flex:1;min-width:0}.skill-name{display:block;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.skill-detail{font-size:10px;color:#d6c794}.skill-row button.mini{min-width:22px;width:22px;padding:0;height:22px}\n.picker-title{display:flex;align-items:center;gap:6px;justify-content:space-between;margin-top:8px}.picker-title input{max-width:170px;width:50%;font-size:11px}\n.skill-tip{position:fixed;z-index:2147483647;max-width:270px;pointer-events:none;padding:9px;background:rgba(8,9,6,.97);border:1px solid #b79b5c;box-shadow:inset 0 0 0 2px #30291c,0 3px 10px #000;font-size:12px;color:#efdaa4;white-space:pre-line;text-shadow:1px 1px #000}\n.skill-tip strong{display:block;color:#fff;margin-bottom:5px}.empty{padding:10px 4px;color:#a09b8c;text-align:center}\npre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:130px;overflow:auto;overscroll-behavior:contain;margin:5px 0}\n.wardrobe-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin-bottom:8px}\n.wardrobe-item{min-width:0;height:48px;padding:4px;justify-content:flex-start;gap:6px;text-align:left;font-size:10px;white-space:normal;line-height:12px}\n.wardrobe-item>.slot{flex:0 0 34px}.wardrobe-item>span:last-child{overflow:hidden;max-height:36px;overflow-wrap:anywhere}\n.wardrobe-item[aria-pressed=true]{color:#ffe08a;outline:1px solid #ffe08a;outline-offset:-2px}\n@media(max-width:500px){:host{right:4px;top:70px;width:calc(100vw - 8px)}.body{margin:0 13px}.pane{max-height:clamp(200px,calc(100vh - 280px),720px)}.field input[type=text]{width:150px}.skill-row{gap:4px}.controls{gap:2px}}\n\n.waiting{white-space:pre-line;color:#c8d9ae;margin:4px 0}\ntextarea{width:100%;color:inherit;background:#151916;font:11px monospace}\n\n.dialog{position:fixed;width:min(430px,calc(100vw - 8px));z-index:10}.dialog[hidden]{display:none}.dialog-body{max-height:min(70vh,640px);margin:0 15px}.report-preview .field{display:block}.report-preview .field>span{display:block;margin-bottom:4px}.report-image{display:block;width:100%;height:auto;margin:6px 0;border:1px solid #5d5034}\n.patch-notes .release{margin:2px 0 10px}.patch-notes .release>strong{display:block;color:#f0d98c;font-weight:normal;margin-bottom:4px}.patch-notes ul{margin:0;padding-left:18px}.patch-notes li{margin:3px 0;line-height:1.4}.patch-notes .row{margin-bottom:6px}\n.update-note{color:#f0d98c;font-size:11px;line-height:1.35;margin:2px 0 6px}.update-note[hidden]{display:none}\n:host(.min){width:auto!important}\n.orb{position:relative;display:block;width:40px;min-width:40px;height:40px;padding:2px;border:1px solid #c9a85c;background:#000;box-shadow:0 0 0 1px #000,0 3px 10px #000c;cursor:grab;touch-action:none}\n.orb:hover{border-color:#ffe08a;background:#000}.orb:active{cursor:grabbing}\n.orb img{position:absolute;inset:2px;width:34px;height:34px;pointer-events:none}\n.orb-mark{display:grid;place-items:center;width:100%;height:100%;color:#c9a85c;font-weight:bold}\n.orb-dot{position:absolute;right:-5px;bottom:-5px;width:12px;height:12px;border-radius:50%;border:2px solid #000;background:#d9583e;box-shadow:0 0 6px #d9583e}\n.orb[data-state=ok] .orb-dot{background:#7bd155;box-shadow:0 0 6px #7bd155;animation:orb-blink 1.6s infinite}\n.orb[data-state=busy] .orb-dot{background:#ffd65a;box-shadow:0 0 6px #ffd65a}\n@keyframes orb-blink{50%{opacity:.45}}\n.orb.alert{animation:orb-ring 1s infinite}@keyframes orb-ring{50%{box-shadow:0 0 0 1px #000,0 0 14px 4px #6fc1ff}}\n.orb-tip{position:absolute;right:48px;top:50%;transform:translateY(-50%);display:none;width:max-content;max-width:260px;padding:6px 9px;text-align:left;font-weight:normal;line-height:1.35;background:rgba(11,10,7,.96);border:1px solid #6b5a36;white-space:normal;cursor:default}\n.orb.left .orb-tip{right:auto;left:48px}\n.orb:hover .orb-tip,.orb.alert .orb-tip{display:grid}\n.orb-tip strong{color:#9fe27e}.orb[data-state=stop] .orb-tip strong{color:#f08c74}.orb[data-state=busy] .orb-tip strong{color:#ffd65a}.orb.alert .orb-tip strong{color:#6fc1ff}\n.orb-tip em{font-style:normal;color:#b9a878;font-size:10px;margin-top:2px}\n/* Wide window (opt-in, screens at least 900 px wide). The compact window is unchanged. */\n.wide-only,nav button>img,header button.layout{display:none}\n@media(min-width:900px){\nheader button.layout{display:inline-flex;height:22px;min-width:0;margin-left:8px;font-size:11px}\n:host(.wide){width:min(1000px,calc(100vw - 8px))}\n:host(.wide) .body{display:grid;grid-template-columns:104px minmax(0,1fr) 196px;grid-template-areas:\"note note note\" \"strip strip ctl\" \"nav wait side\" \"nav pane side\" \"nav fb side\" \"log log log\";column-gap:8px;align-items:start}\n:host(.wide) .wide-only{display:block}\n:host(.wide) .status{display:none}\n:host(.wide) .update-note{grid-area:note}\n:host(.wide) .strip{grid-area:strip;display:grid;grid-template-columns:150px minmax(0,1fr) 210px;gap:12px;align-items:center;margin:4px 0 8px;padding:9px 12px;background-color:#282728;background-image:var(--s-ib_lu),var(--s-ib_ru),var(--s-ib_ld),var(--s-ib_rd),var(--s-ib_mu),var(--s-ib_md),var(--s-ib_ls),var(--s-ib_rs);background-position:left top,right top,left bottom,right bottom,left top,left bottom,left top,right top;background-repeat:no-repeat,no-repeat,no-repeat,no-repeat,repeat-x,repeat-x,repeat-y,repeat-y}\n:host(.wide) .who strong{display:block;color:#fff;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}:host(.wide) .who .muted{display:block;margin:2px 0 0;text-transform:capitalize}\n:host(.wide) .bars{display:grid;gap:3px}:host(.wide) .gauge{display:grid;grid-template-columns:28px minmax(0,1fr) 96px;align-items:center;gap:6px}\n:host(.wide) .gauge label{color:#b9a878;font-size:10px;font-weight:bold}:host(.wide) .gauge span{text-align:right;font-size:11px;color:#fff;font-variant-numeric:tabular-nums}\n:host(.wide) .track{height:10px;background:#050505;border:1px solid #4e4532;padding:1px}:host(.wide) .track i{display:block;height:100%;width:0;transition:width .3s}\n:host(.wide) .gauge.hp i{background:linear-gradient(#ff7a6a,#b01e1a 55%,#6e0f0d)}:host(.wide) .gauge.mp i{background:linear-gradient(#7fb4ff,#2557b8 55%,#16337a)}:host(.wide) .gauge.xp i{background:linear-gradient(#ffe58a,#c99a1e 55%,#7a5a0a)}\n:host(.wide) .state{display:grid;grid-template-columns:10px minmax(0,1fr);column-gap:7px;align-items:center;padding:5px 9px;background:#0a0d0b;border:1px solid #7a3a2c}\n:host(.wide) .state strong{color:#f08c74;font-size:13px}:host(.wide) .state span{grid-column:2;color:#b9a878;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n:host(.wide) .state-dot{width:8px;height:8px;border-radius:50%;background:#d9583e;box-shadow:0 0 6px #d9583e}\n:host(.wide) .state[data-state=ok]{border-color:#4e6b3c}:host(.wide) .state[data-state=ok] strong{color:#9fe27e}:host(.wide) .state[data-state=ok] .state-dot{background:#7bd155;box-shadow:0 0 6px #7bd155;animation:orb-blink 1.6s infinite}\n:host(.wide) .state[data-state=busy]{border-color:#7a6a2c}:host(.wide) .state[data-state=busy] strong{color:#ffd65a}:host(.wide) .state[data-state=busy] .state-dot{background:#ffd65a;box-shadow:0 0 6px #ffd65a}\n:host(.wide) .controls{grid-area:ctl;display:grid;grid-template-columns:1fr 1fr;gap:3px;padding:4px 0 8px;align-self:center}:host(.wide) .controls button:first-child{grid-column:1/-1;height:28px;font-weight:bold;color:#fff}\n:host(.wide) .waiting{grid-area:wait}\n:host(.wide) nav{grid-area:nav;flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:3px;padding-top:0}\n:host(.wide) nav button{flex:none;flex-direction:column;gap:3px;height:58px;padding:0;font-size:11px;border:0;border-image:none;background:linear-gradient(#262420,#16150f);box-shadow:inset 0 0 0 1px #4a4130}\n:host(.wide) nav button:hover{color:#fff;box-shadow:inset 0 0 0 1px #8f7a45}\n:host(.wide) nav button[aria-selected=true]{color:#fff;background:linear-gradient(#2a5b74,#183447);box-shadow:inset 0 0 0 1px #5fb6d9,0 0 6px #2d7fa588}\n:host(.wide) nav button>img{display:block;width:28px;height:28px;border:1px solid #5d5034;background:#000}\n:host(.wide) .pane{grid-area:pane;padding-top:0;height:clamp(240px,calc(100vh - 470px),600px);max-height:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:8px;align-content:start;align-items:start}\n:host(.wide) .pane>:not(fieldset){grid-column:1/-1}\n/* A page with one long box (Loot) spreads its rows over both columns. */\n:host(.wide) .pane>fieldset:only-of-type{grid-column:1/-1;columns:2;column-gap:28px}:host(.wide) .pane>fieldset:only-of-type>*{break-inside:avoid}:host(.wide) .pane>fieldset:only-of-type>p.muted{column-span:all}\n:host(.wide) .feedback{grid-area:fb}\n:host(.wide) .side{grid-area:side}:host(.wide) .side fieldset{margin-bottom:8px}:host(.wide) .side button{width:100%;margin-top:6px}\n:host(.wide) .readout{display:flex;justify-content:space-between;gap:6px;margin:4px 0;font-size:11px}:host(.wide) .readout span{color:#b9a878}:host(.wide) .readout b{color:#fff;font-weight:normal;text-align:right;font-variant-numeric:tabular-nums}\n:host(.wide) .logbox{grid-area:log;margin-top:4px;padding:7px 12px 8px;background:#0b0a07cc;border:1px solid #4a4130}:host(.wide) .logbox>strong{color:#ffd65a}\n:host(.wide) .log{list-style:none;margin:4px 0 0;padding:0;height:78px;overflow:auto;overscroll-behavior:contain;font-size:11px;scrollbar-color:#796a48 #171711}\n:host(.wide) .log li{display:flex;gap:8px;padding:1px 0}:host(.wide) .log time{color:#7f7458;font-variant-numeric:tabular-nums;flex:none}:host(.wide) .log li.warn span,:host(.wide) .log li.error span{color:#ffc67a}\n}\n/* Map page */\n.map-stage{position:relative;border:1px solid #6b5a36;box-shadow:0 0 0 2px #0b0a07,0 0 0 3px #4a4130;margin:2px 0 6px}\n.map-stage canvas{display:block;width:100%;height:280px;cursor:crosshair;touch-action:none}\n.map-tools{position:absolute;right:5px;top:5px;display:flex;gap:2px}.map-tools button{min-width:24px;height:22px;padding:0 6px;font-size:12px}\n.map-coords{position:absolute;left:5px;bottom:4px;padding:1px 6px;background:#000a;font-size:11px;pointer-events:none}.map-coords:empty{display:none}\n.map-legend{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:11px}.map-legend i{display:inline-block;width:12px;height:12px;background:center/contain no-repeat}\n@media(min-width:900px){:host(.wide) .pane>.map-box{grid-column:1/-1}:host(.wide) .map-stage canvas{height:340px}}\n/* Town page: the trip as a row of item pictures */\n.trip-flow{list-style:none;display:flex;margin:4px 0 0;padding:0}.trip-flow li{flex:1;display:grid;justify-items:center;gap:2px;position:relative;text-align:center;min-width:0}\n.trip-flow li:not(:last-child):after{content:'';position:absolute;top:17px;left:calc(50% + 21px);right:calc(-50% + 21px);height:2px;background:linear-gradient(90deg,#c9a85c,#5d5034)}\n.trip-flow strong{color:#fff;font-size:11px;font-weight:normal}.trip-flow small{color:#a09b8c;font-size:10px}.trip-flow small.missing{color:#ffc67a}\nnav button{min-width:0;padding:0 3px}\n@media(min-width:900px){:host(.wide) .pane>fieldset:has(.trip-flow){grid-column:1/-1}}\n/* Party page */\n.members{display:grid;gap:3px}\n.member{display:grid;grid-template-columns:minmax(0,1fr) 110px auto;align-items:center;gap:8px;min-height:38px;padding:4px 6px;background-image:var(--s-bar_l),var(--s-bar_r),var(--s-bar);background-position:left,right,center;background-repeat:no-repeat,no-repeat,repeat-x;background-size:4px 100%,4px 100%,auto 100%}\n.member.dead{opacity:.6}.member-name strong{display:block;color:#fff;font-weight:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.member-name .muted{margin:0}\n.member-bars{display:grid;gap:3px}.pbar{height:5px;background:#050505;border:1px solid #3d3626}.pbar i{display:block;height:100%}.pbar.hp i{background:linear-gradient(#ff7a6a,#b01e1a)}.pbar.mp i{background:linear-gradient(#7fb4ff,#2557b8)}\n.member-buffs{display:flex;gap:2px}.member-buffs .skill-icon{width:22px;min-width:22px;height:22px;flex:0 0 22px}.member-buffs .skill-icon img{width:20px;height:20px}.member-buffs .skill-icon.off{filter:grayscale(1) brightness(.5)}\n@media(min-width:900px){:host(.wide) .pane>fieldset:has(.members){grid-column:1/-1}}\n/* Items page */\n.degrees{display:flex;flex-wrap:wrap;gap:4px 8px;margin:4px 0 8px}.degrees label{display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer}\n.bulk{gap:3px;margin:4px 0 6px}.bulk button{min-width:0;font-size:11px;padding:0 6px}.bulk button.armed{color:#ffc67a}\n.item-table{display:grid;border:1px solid #3d3626;max-height:none}\n.item-row{display:grid;grid-template-columns:26px minmax(0,1fr) 26px 34px repeat(5,30px);align-items:center;gap:2px;min-height:28px;padding:1px 3px;border-top:1px solid #2f2a1e}\n.item-row.head{min-height:20px;border-top:0;color:#b9a878;font-size:10px;text-align:center}.item-row.head span:nth-child(2){text-align:left}\n.item-row:not(.head):hover{background:#ffffff0a}.item-row.ruled{background:#2a2414}\n.item-row .skill-icon{width:24px;min-width:24px;height:24px;flex:0 0 24px}.item-row .skill-icon img{width:22px;height:22px}\n.item-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#fff}.item-name em{font-style:normal;color:#6fc1ff;margin-left:5px;font-size:10px}\n.item-row>span:nth-child(3){text-align:center;color:#d6c794}\n.item-row button.cell{min-width:0;width:100%;height:20px;padding:0;font-size:11px;border-width:3px}.item-row button.cell.on{color:#ffd65a}\n.pager{justify-content:space-between;margin-top:6px}\n.item-menu{position:fixed;z-index:30;display:grid;gap:2px;min-width:170px;padding:6px;background:rgba(11,10,7,.97);border:1px solid #6b5a36;box-shadow:0 4px 14px #000}\n.item-menu strong{color:#fff;font-weight:normal;margin:0 2px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.item-menu button{justify-content:flex-start;height:22px}\n@media(min-width:900px){:host(.wide) .pane>fieldset:has(.item-table){grid-column:1/-1}:host(.wide) .item-row{grid-template-columns:26px minmax(0,1fr) 34px 44px repeat(5,48px)}}\n/* Ten pages: two rows of five tabs in the compact window. The wide window keeps its page list. */\nnav button{flex:1 0 calc(20% - 2px)}\nfieldset>input[type=search]{width:100%;margin:2px 0 6px}\n";
 
 function assetLoaderMain(self) {
   'use strict';
@@ -4348,7 +5670,7 @@ function assetLoaderMain(self) {
       const p = fetchBytes(packPath, { range: [0, 11], timeout: 30000 }).then((h) => {
         let magic = '';
         for (let i = 0; i < 8; i++) magic += String.fromCharCode(h[i]);
-        if (magic !== 'SROPACK1') throw fail('format', 'bad pack identifier: ' + packPath);
+        if (magic !== 'SROPACK1' && magic !== 'SROPACK2') throw fail('format', 'bad pack identifier: ' + packPath);
         const len = new DataView(h.buffer, h.byteOffset, h.byteLength).getUint32(8, true);
         if (len > 16 << 20) throw fail('format', 'bad pack header: ' + packPath);
         return 12 + len;
@@ -4377,9 +5699,10 @@ function assetLoaderMain(self) {
       const pack = await cacheGet(GAME_CACHE, ORIGIN + '/assets/.verified/' + pk.sha256);
       if (pack && pack.length >= 12) {
         const len = new DataView(pack.buffer, pack.byteOffset, pack.byteLength).getUint32(8, true);
-        const start = 12 + len + asset.offset;
-        if (start + asset.length <= pack.length) {
-          const b = pack.slice(start, start + asset.length);
+        const start = 12 + len + asset.offset, span = asset.stored ? asset.stored.length : asset.length;
+        if (start + span <= pack.length) {
+          let b = pack.slice(start, start + span);
+          if (asset.stored) b = await gunzip(b);
           if ((await sha256(b)) === asset.sha256) {
             stats.gamePack++;
             return b;
@@ -4404,9 +5727,12 @@ function assetLoaderMain(self) {
       }
     }
     const start = (await packStart(asset.packPath)) + asset.offset;
-    const raw = await fetchBytes(asset.packPath, { range: [start, start + asset.length - 1], timeout: 45000 });
+    const span = asset.stored ? asset.stored.length : asset.length;
+    const raw = await fetchBytes(asset.packPath, { range: [start, start + span - 1], timeout: 45000 });
     stats.range++;
-    return raw;
+    if (!asset.stored) return raw;
+    if (asset.stored.encoding !== 'gzip') throw fail('format', 'unknown pack member encoding: ' + asset.path);
+    return gunzip(raw);
   }
 
   // tries: {refreshed, waits}: one manifest re-read and up to 3 backoff waits per request.
@@ -5731,15 +7057,42 @@ const LeanWardrobe = {
 };
 
 
-// Native reinforce only. Never resend an unconfirmed material-spending request.
+// Generated by gen-alchemy.py from the server item data: the authored success chance of every reinforce elixir and lucky powder
+// at plus +0..+11 (the +11 value holds above), and the elixir ids of each gear kind. Do not edit by hand.
+const ALCHEMY_DATA = {"elixirs":{"3675":[25,20,15,10,10,10,10,10,10,5,5,5],"3679":[50,40,30,19,17,17,17,17,17,12,12,12],"3676":[25,20,15,10,10,10,10,10,10,5,5,5],"3680":[50,40,30,19,17,17,17,17,17,12,12,12],"3677":[25,20,15,10,10,10,10,10,10,5,5,5],"3681":[50,40,30,19,17,17,17,17,17,12,12,12],"3678":[25,20,15,10,10,10,10,10,10,5,5,5],"3682":[50,40,30,19,17,17,17,17,17,12,12,12]},"powders":{"3683":{"degree":1,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3684":{"degree":2,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3685":{"degree":3,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3686":{"degree":4,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3687":{"degree":5,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3688":{"degree":6,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3689":{"degree":7,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3690":{"degree":8,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3691":{"degree":9,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3692":{"degree":10,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3693":{"degree":11,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3694":{"degree":12,"chances":[50,30,20,8,8,8,8,8,8,8,8,8]},"3695":{"degree":1,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3696":{"degree":2,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3697":{"degree":3,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3698":{"degree":4,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3699":{"degree":5,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3700":{"degree":6,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3701":{"degree":7,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3702":{"degree":8,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3703":{"degree":9,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3704":{"degree":10,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3705":{"degree":11,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]},"3706":{"degree":12,"chances":[50,40,30,20,20,20,20,20,20,10,10,10]}},"kinds":{"weapon":[3675,3679],"shield":[3676,3680],"armor":[3677,3681],"accessory":[3678,3682]}};
+
+
+// Item enhancement (elixirs, for weapons, shields, armour and accessories) and the Luck / Steady / Immortal / Astral stones. Never resend an unconfirmed
+// material-spending request.
+// A stone adds 1 to the weapon's attribute count (at most 6): Luck raises the enhancement success chance, Steady
+// protects the durability and Immortal the weapon itself when an enhancement fails. Stone items are one per weapon
+// degree 1..12, in consecutive ids. The server takes these stones (item type 3,3,11,7) only in the request it calls
+// "magic" (mode byte 3). The page's own attribute mode sends byte 2, which the server answers with refusal 0x10 for
+// them, so the command here uses mode 'magic'. A fusion can fail: the stone is then used up and the answer is 0x23.
+const STONES = {
+  luck: { label: 'Luck', option: 'MATTR_LUCK', base: 6871 },
+  steady: { label: 'Steady', option: 'MATTR_SOLID', base: 6859 },
+  immortal: { label: 'Immortal', option: 'MATTR_ATHANASIA', base: 6847 },
+  astral: { label: 'Astral', option: 'MATTR_ASTRAL', base: 6883 },
+};
+const STONE_MAX = 6;
+const STONE_FAILED = 0x23;
 const Alchemy = {
-  windowOwner: null, selected: null, run: null, pending: null, result: null, message: 'Select a bag weapon to begin.', started: false,
+  windowOwner: null, selected: null, run: null, pending: null, result: null, message: 'Select an item from your bag to begin.', started: false,
   cfg() { return Settings.profile.alchemy; },
-  weapon(i) { return i && i.slot >= 13 && i.slot <= 255 && (i.typeFlags & 0x7e) === 0x2c && ((i.typeFlags >>> 7) & 15) === 6 && Number.isInteger(i.plus) && i.plus >= 0; },
+  // The server's enhancement families (alchemy catalog.go category()): weapon, shield, accessory and armor. An elixir is
+  // refused (0x09) for any other family.
+  kind(i) {
+    if (!i || i.slot < 13 || i.slot > 255 || (i.typeFlags & 0x7e) !== 0x2c || !Number.isInteger(i.plus) || i.plus < 0) return '';
+    const t = (i.typeFlags >>> 7) & 15;
+    return t === 6 ? 'weapon' : t === 4 ? 'shield' : t === 5 || t === 12 ? 'accessory' : [1, 2, 3, 9, 10, 11].includes(t) ? 'armor' : '';
+  },
+  gear(i) { return !!this.kind(i); },
   degree(i) { const n = i?.tooltip?.fields?.itemClass; return Number.isInteger(n) && n > 0 ? Math.floor((n - 1) / 3) + 1 : 0; },
   // Retail itemdata: weapon recipes 3675/3679 (param1 includes category 6).
   // Powder A 3683..3694 and B 3695..3706 have param1 = degree 1..12.
-  elixir(i) { return i && [3675, 3679].includes(i.refObjId) && (i.typeFlags & 0xfffe) === 0x0d6c && i.quantity > 0 && i.slot >= 13; },
+  // Reinforce elixirs (item data ITEM_ETC_ARCHEMY_REINFORCE_RECIPE_<KIND>_A / _B), per gear kind.
+  elixir(i, kind = 'weapon') { return i && !!ALCHEMY_DATA.kinds[kind]?.includes(i.refObjId) && (i.typeFlags & 0xfffe) === 0x0d6c && i.quantity > 0 && i.slot >= 13; },
   powderDegree(i) {
     if (!i || (i.typeFlags & 0xfffe) !== 0x156c || !(i.quantity > 0) || i.slot < 13) return 0;
     return i.refObjId >= 3683 && i.refObjId <= 3694 ? i.refObjId - 3682 : i.refObjId >= 3695 && i.refObjId <= 3706 ? i.refObjId - 3694 : 0;
@@ -5749,15 +7102,80 @@ const Alchemy = {
   select(slot) {
     if (this.run || this.pending) return UI.toast('Stop alchemy and wait for the pending result before changing weapons.', 'warn');
     const item = World.items().find(i => i.slot === Number(slot));
-    this.selected = this.weapon(item) ? { slot: item.slot, fingerprint: this.fingerprint(item) } : null;
-    this.message = this.selected ? 'Weapon selected. Set the target and attempt limit.' : 'Select a bag weapon to begin.';
+    this.selected = this.gear(item) ? { slot: item.slot, fingerprint: this.fingerprint(item) } : null;
+    this.message = this.selected ? 'Item selected. Set the target and attempt limit.' : 'Select an item from your bag to begin.';
   },
   item() { return World.items().find(i => i.slot === this.selected?.slot); },
-  materials(item, cfg = this.cfg()) {
-    const elixir = World.items().find(i => this.elixir(i) && (!cfg.elixir || i.refObjId === cfg.elixir));
-    const powder = cfg.powder ? World.items().find(i => this.powderDegree(i) === this.degree(item) && this.degree(item) > 0) : null;
-    return { elixir, powder };
+  // The count of one attribute (Luck, Steady, Immortal) on a weapon, from its magic options; the option's amount is the count.
+  attributeCount(item, option) {
+    const refs = item?.magicReferences || [];
+    return (item?.magic || []).reduce((n, encoded) => {
+      const bits = toBigInt(encoded), ref = refs.find(r => r.paramId === Number(bits & 65535n));
+      return ref?.optionName === option ? Math.max(n, Number(bits >> 32n) & 0xffffffff) : n;
+    }, 0);
   },
+  // Counts are readable only when every magic option has its reference loaded; otherwise they would read as zero.
+  attributesKnown(item) {
+    const refs = item?.magicReferences || [];
+    return (item?.magic || []).every(encoded => refs.some(r => r.paramId === Number(toBigInt(encoded) & 65535n)));
+  },
+  // The helpers switched on, and how many charges of each to keep on the item (1 to 6).
+  wanted(cfg = this.cfg()) { return Object.keys(STONES).filter(kind => !!cfg.use?.[kind]); },
+  keep(kind, cfg = this.cfg()) { return Math.min(STONE_MAX, Math.max(1, Math.floor(Number(cfg.stones?.[kind])) || 1)); },
+  // The plus from which a helper is used.
+  from(kind, cfg = this.cfg()) { return Math.max(0, Number(cfg.from?.[kind]) || 0); },
+  // The next stone to fuse: the first kind still below its wanted count, with a bag stone of the weapon's degree.
+  nextStone(item, cfg = this.cfg(), plus = Infinity) {
+    const degree = this.degree(item);
+    for (const kind of this.wanted(cfg).filter(k => plus >= this.from(k, cfg))) {
+      const want = this.keep(kind, cfg), have = this.attributeCount(item, STONES[kind].option);
+      if (have >= want) continue;
+      const ref = STONES[kind].base + degree - 1;
+      const stone = World.items().find(i => i.refObjId === ref && (i.typeFlags & 0xfffe) === 0x3dec && i.quantity > 0 && i.slot >= 13);
+      return stone ? { kind, item: stone, count: have } : { missing: kind };
+    }
+    return null;
+  },
+  powderWanted(item, cfg = this.cfg()) { return !!cfg.powder && item.plus >= this.from('powder', cfg); },
+  materials(item, cfg = this.cfg()) {
+    const kind = this.kind(item), degree = this.degree(item);
+    const elixir = World.items().find(i => this.elixir(i, kind) && (!cfg.elixir || i.refObjId === cfg.elixir));
+    const wantPowder = this.powderWanted(item, cfg);
+    const powder = wantPowder ? World.items().find(i => this.powderDegree(i) === degree && degree > 0) : null;
+    return { elixir, powder, wantPowder };
+  },
+  // The server's odds for one attempt (reinforce.go): the elixir's chance at the plus (+11 holds above), plus the powder's
+  // and the Luck bonus while the running chance is below 100, clamped to 10..100. Skill and avatar bonuses are not known here.
+  chanceAt(plus, elixirRef, powderRef, luck) {
+    const e = ALCHEMY_DATA.elixirs[elixirRef]; if (!e) return null;
+    const at = Math.min(Math.max(0, plus), 11), p = powderRef && ALCHEMY_DATA.powders[powderRef];
+    let c = e[at];
+    if (p && c < 100) c += p.chances[at];
+    if (luck && c < 100) c += 5;
+    return Math.max(10, Math.min(100, c));
+  },
+  // Expected attempts to climb from plus `from` to `target` when a failure resets to +0 (no Astral), and the chance of
+  // getting there without one failure. P[k] is the chance of climbing from +0 to +k in a row.
+  expected(from, target, chance) {
+    const P = [1]; for (let k = 0; k < target; k++) P[k + 1] = P[k] * chance(k) / 100;
+    let all = 0, run = 0; for (let k = 0; k < target; k++) { all += P[k]; if (k >= from) run += P[k]; }
+    const q = P[target] / P[from], first = all / P[target];
+    return { attempts: run / P[from] + (1 - q) * first, clean: q };
+  },
+  // What the next attempts would use and how likely they are to work, from the bag and the settings.
+  odds(item, cfg = this.cfg()) {
+    const kind = this.kind(item); if (!kind) return null;
+    const elixir = World.items().find(i => this.elixir(i, kind) && (!cfg.elixir || i.refObjId === cfg.elixir));
+    if (!elixir) return null;
+    const degree = this.degree(item), powder = cfg.powder && degree > 0 ? World.items().find(i => this.powderDegree(i) === degree) : null;
+    const luck = !!cfg.use?.luck;
+    const at = plus => this.chanceAt(plus, elixir.refObjId, powder && plus >= this.from('powder', cfg) ? powder.refObjId : 0, luck && plus >= this.from('luck', cfg));
+    const target = Math.min(250, Math.max(item.plus + 1, Number(cfg.target) || 0));
+    return { now: at(item.plus), plan: item.plus < target ? this.expected(item.plus, target, at) : null, target };
+  },
+  // The log and statistics shown under the settings: newest last, at most 60 lines.
+  log: [],
+  note(text) { this.log.push({ at: Date.now(), text }); if (this.log.length > 60) this.log.shift(); },
   blocked() {
     if (BuffGear.run || BuffGear.recovery) return 'Restore or review combat gear before alchemy.';
     const gp = World.gp;
@@ -5769,31 +7187,38 @@ const Alchemy = {
     if (Restock.activeShop() || gp.storage || gp.exchange?.open || gp.exchange?.requesting || gp.stall?.phase && gp.stall.phase !== 'none') return 'Close shop, storage, trade and stall first.';
     return '';
   },
-  start() {
+  start(stonesOnly = false) {
     if (this.run) return;
     if (this.pending) return UI.toast('Previous attempt is unconfirmed. Wait for its result; reload if the game cannot settle it.', 'warn');
     const error = this.blocked(), gp = World.gp, item = this.item(), c = this.cfg();
     const reject = text => { this.message = text; UI.toast(text, 'warn'); };
     if (error) return reject(error);
     if (gp.inventoryPending || !gp.alchemy || gp.alchemy.pending) return reject('Wait for known, settled inventory and alchemy state.');
-    if (!this.weapon(item) || this.fingerprint(item) !== this.selected?.fingerprint) return reject('Weapon changed or moved. Select it again.');
+    if (!this.gear(item) || this.fingerprint(item) !== this.selected?.fingerprint) return reject('Weapon changed or moved. Select it again.');
+    const wants = this.wanted(c);
+    if (stonesOnly && !wants.length) return reject('Tick at least one stone type first (Use Luck, Steady, Immortal or Astral).');
+    if (wants.length && !this.degree(item)) return reject('Weapon degree is unknown; cannot choose matching stones.');
+    if (wants.length && !this.attributesKnown(item)) return reject('The weapon\'s attributes are not loaded yet. Try again in a moment.');
+    if (!stonesOnly) {
     if (!Number.isInteger(c.target) || c.target < 1 || c.target > 250 || !Number.isInteger(c.limit) || c.limit < 1 || c.limit > 1000) return reject('Set target + from 1 to 250 and attempts from 1 to 1000.');
     if (item.plus >= c.target) return reject('Weapon already meets the target +.');
     const materials = this.materials(item);
-    if (!materials.elixir) return reject('No selected weapon elixirs in the bag.');
-    if (c.powder && !this.degree(item)) return reject('Weapon degree is unknown; cannot choose compatible lucky powder.');
-    if (c.powder && !materials.powder) return reject('No lucky powder matching this weapon degree.');
-    this.run = { slot: item.slot, identity: this.identity(item), fingerprint: this.fingerprint(item),
+    if (!materials.elixir) return reject(`No selected ${this.kind(item)} elixirs in the bag.`);
+    if (materials.wantPowder && !this.degree(item)) return reject('Weapon degree is unknown; cannot choose compatible lucky powder.');
+    if (materials.wantPowder && !materials.powder) return reject('No lucky powder matching this weapon degree.');
+    }
+    this.run = { slot: item.slot, identity: this.identity(item), fingerprint: this.fingerprint(item), stonesOnly,
       cfg: { ...c }, config: JSON.stringify(c), manualAt: Manual.lastAt, character: World.charName,
-      attempts: 0, successes: 0, failures: 0, elixirs: 0, powders: 0, nextAt: now(), opening: null };
+      attempts: 0, successes: 0, failures: 0, destroyed: 0, highest: item.plus, elixirs: 0, powders: 0, stoneAttempts: 0, stoneFailures: 0, stonesUsed: { luck: 0, steady: 0, immortal: 0, astral: 0 }, nextAt: now(), opening: null };
     this.result = this.run; this.message = 'Preparing alchemy.';
+    this.note(stonesOnly ? 'Started fusing stones.' : `Started: ${item.name || Items.name(item.refObjId)} +${item.plus} to +${c.target}.`);
   },
   stop(reason = 'Alchemy stopped. An attempt already sent may still finish.') {
-    if (this.run) { this.run = null; this.message = reason; }
+    if (this.run) { this.note(reason); this.run = null; this.message = reason; }
     // Close only a session we opened/used, on the same character. Native close
     // does not cancel reinforcement; keep the pending result until confirmed.
     const owner = this.windowOwner; this.windowOwner = null;
-    if (owner && owner.character === World.charName && World.inWorld() && World.gp?.alchemy?.mode === 'reinforce')
+    if (owner && owner.character === World.charName && World.inWorld() && ['reinforce', 'magic'].includes(World.gp?.alchemy?.mode))
       Cmd.raw({ kind: 'alchemy-close' }, 'Close alchemy');
   },
   init() {
@@ -5808,19 +7233,22 @@ const Alchemy = {
     const p = this.pending, gp = World.gp, a = gp?.alchemy;
     if (!p || !a || gp === p.state) return;
     if (a.pending) {
-      if (a.mode !== 'reinforce' || a.slot !== p.run.slot) this.stop('Alchemy state changed unexpectedly. Wait for the outstanding result.');
+      if (a.mode !== (p.stone ? 'magic' : 'reinforce') || a.slot !== p.run.slot) this.stop('Alchemy state changed unexpectedly. Wait for the outstanding result.');
       return;
     }
     if (a !== p.before && a.error !== null && a.error !== undefined) {
-      this.pending = null; this.stop('Alchemy refused by the game (code ' + a.error + ').'); return;
+      // A failed stone fusion is answered like a refusal (0x23), but the stone is gone: it is a result, not a stop.
+      if (p.stone && a.error === STONE_FAILED) return this.observeStone(p, gp, true);
+      this.pending = null; this.stop(p.stone ? this.stoneRefusal(a.error) : 'Alchemy refused by the game (code ' + a.error + ').'); return;
     }
+    if (p.stone) return this.observeStone(p, gp);
     const outcome = a.flags & 0x70;
     if (a.mode !== 'reinforce' || a.slot !== p.run.slot || ![0x10, 0x20, 0x40].includes(outcome) || gp.inventoryPending) return;
     // The worker may publish the start and result between our ticks. Require
     // exactly one of each selected reagent consumed, not just a stale flag.
     if (Restock.count(p.elixir.ref) !== p.elixir.before - 1 || p.powder && Restock.count(p.powder.ref) !== p.powder.before - 1) return;
     const item = World.items().find(i => i.slot === p.run.slot);
-    if (outcome !== 0x40 && (!this.weapon(item) || this.identity(item) !== p.run.identity)) {
+    if (outcome !== 0x40 && (!this.gear(item) || this.identity(item) !== p.run.identity)) {
       this.stop('Weapon identity changed. Outstanding result requires manual review.'); return;
     }
     if (outcome === 0x40 && item) { this.stop('Unexpected destruction result. Outstanding result requires manual review.'); return; }
@@ -5830,6 +7258,9 @@ const Alchemy = {
     this.pending = null;
     p.run.elixirs++; if (p.powder) p.run.powders++;
     if (outcome === 0x10) p.run.successes++; else p.run.failures++;
+    if (outcome === 0x40) p.run.destroyed++;
+    this.note(outcome === 0x10 ? `Success: +${p.plus} → +${item.plus}` : outcome === 0x40 ? `Destroyed at +${p.plus}` : `Failed at +${p.plus}: now +${item.plus}`);
+    if (item) p.run.highest = Math.max(p.run.highest, item.plus);
     if (outcome === 0x40) { this.selected = null; this.stop('Weapon destroyed; alchemy stopped.'); this.message = 'Weapon destroyed; alchemy stopped.'; return; }
     p.run.fingerprint = this.fingerprint(item); this.selected = { slot: item.slot, fingerprint: p.run.fingerprint };
     p.run.nextAt = now() + 1000;
@@ -5837,6 +7268,25 @@ const Alchemy = {
     this.message = outcome === 0x10 ? 'Success: weapon is now +' + item.plus + '.' : 'Failed attempt: weapon is now +' + item.plus + '.';
     if (item.plus >= p.run.cfg.target) this.stop('Target reached: +' + item.plus + '.');
     else if (p.run.attempts >= p.run.cfg.limit) this.stop('Attempt limit reached.');
+  },
+  // A stone fusion is confirmed by exactly one stone leaving the bag with the inventory settled, not by a flag alone.
+  stoneRefusal(code) {
+    const why = { 0x10: 'the game does not accept this stone here', 0x12: 'the slots were not accepted', 6: 'an item or stone was missing',
+      7: 'there was no stone', 9: 'this weapon cannot take that attribute', 0x21: 'the stone is not of the weapon\'s degree',
+      0x22: 'the weapon is at 6 of that stone or has no free magic option slot', 0x24: 'an Astral stone needs more Immortal charges' }[code];
+    return `Stone fusion refused by the game (code ${code}${why ? ': ' + why : ''}).`;
+  },
+  observeStone(p, gp, failed = false) {
+    if (gp.inventoryPending || Restock.count(p.stone.ref) !== p.stone.before - 1) return;
+    const item = World.items().find(i => i.slot === p.run.slot), label = STONES[p.stone.kind].label;
+    if (!this.gear(item) || this.identity(item) !== p.run.identity) { this.stop('Weapon identity changed. Outstanding result requires manual review.'); return; }
+    const count = this.attributeCount(item, STONES[p.stone.kind].option);
+    this.pending = null; p.run.stonesUsed[p.stone.kind]++; if (failed) p.run.stoneFailures++;
+    this.note(failed ? `${label} stone failed and was used up` : `${label} stone fused: ${count} of ${STONE_MAX}`);
+    p.run.fingerprint = this.fingerprint(item); this.selected = { slot: item.slot, fingerprint: p.run.fingerprint };
+    p.run.nextAt = now() + 1000;
+    if (this.run !== p.run) return;
+    this.message = failed ? `The ${label} fusion failed and the stone was used up (still ${count}).` : count > p.stone.count ? `${label} is now ${count} of ${STONE_MAX}.` : `A ${label} stone was used but the count did not rise (still ${count}).`;
   },
   tick() {
     this.observe();
@@ -5847,8 +7297,8 @@ const Alchemy = {
     if (blocked || r.character !== World.charName || r.manualAt !== Manual.lastAt || r.config !== JSON.stringify(this.cfg())) return this.stop(blocked || 'Alchemy stopped: settings, character or manual control changed.');
     if (this.pending) { this.message = 'Attempt ' + r.attempts + ': waiting for server result.'; return; }
     const item = World.items().find(i => i.slot === r.slot);
-    if (!this.weapon(item) || this.fingerprint(item) !== r.fingerprint) return this.stop('Weapon changed or moved. Select it again.');
-    if (r.attempts >= r.cfg.limit || item.plus >= r.cfg.target) return this.stop('Target or attempt limit reached.');
+    if (!this.gear(item) || this.fingerprint(item) !== r.fingerprint) return this.stop('Weapon changed or moved. Select it again.');
+    if (!r.stonesOnly && (r.attempts >= r.cfg.limit || item.plus >= r.cfg.target)) return this.stop('Target or attempt limit reached.');
     if (!gp.alchemy) return this.stop('Alchemy state unavailable.');
     if (gp.inventoryPending || gp.alchemy.pending || Loot.pressed()) { this.message = 'Alchemy waiting for inventory or potion use.'; return; }
     if (!gp.alchemy.visible) {
@@ -5860,8 +7310,25 @@ const Alchemy = {
     }
     if (r.opening !== null) r.opening = null;
     if (now() < r.nextAt || !Cmd.spaced('alchemy-start')) return;
-    const { elixir, powder } = this.materials(item, r.cfg);
-    if (!elixir || r.cfg.powder && !powder) return this.stop('Selected elixirs or compatible lucky powder ran out.');
+    const need = this.nextStone(item, r.cfg, r.stonesOnly ? Infinity : item.plus);
+    if (need?.missing) return this.stop(`No ${STONES[need.missing].label} stone of degree ${this.degree(item)} in the bag.`);
+    if (need) {
+      const cap = Math.max(0, Math.floor(Number(r.cfg.stoneLimit) || 0));
+      if (cap && r.stoneAttempts >= cap) return this.stop(`Stopped after ${cap} stone fusions (your limit).`);
+      const slots = [item.slot, need.item.slot];
+      if (slots.some(slot => !Number.isInteger(slot) || slot < 13 || slot > 255) || new Set(slots).size !== slots.length) return this.stop('Invalid material slots.');
+      if (Cmd.raw({ kind: 'alchemy-start', mode: 'magic', slots }, 'Alchemy: fuse a ' + STONES[need.kind].label + ' stone')) {
+        this.windowOwner = { character: r.character };
+        r.stoneAttempts++;
+        this.pending = { run: r, state: gp, before: gp.alchemy, at: now(), plus: item.plus,
+          stone: { kind: need.kind, ref: need.item.refObjId, before: Restock.count(need.item.refObjId), count: need.count } };
+        this.message = `Fusing a ${STONES[need.kind].label} stone: waiting for the server result.`;
+      }
+      return;
+    }
+    if (r.stonesOnly) return this.stop('The weapon has the wanted stone counts.');
+    const { elixir, powder, wantPowder } = this.materials(item, r.cfg);
+    if (!elixir || wantPowder && !powder) return this.stop('Selected elixirs or compatible lucky powder ran out.');
     const slots = [item.slot, elixir.slot, ...(powder ? [powder.slot] : [])];
     if (slots.some(slot => !Number.isInteger(slot) || slot < 13 || slot > 255) || new Set(slots).size !== slots.length) return this.stop('Invalid material slots.');
     if (Cmd.raw({ kind: 'alchemy-start', mode: 'reinforce', slots }, 'Alchemy: enhance selected weapon')) {
@@ -5874,28 +7341,62 @@ const Alchemy = {
     }
   },
   draw() {
-    const c = () => this.cfg(), weapons = () => [[-1, 'Select a weapon from your bag'], ...World.items().filter(i => this.weapon(i)).map(i => [i.slot, (i.name || Items.name(i.refObjId)) + ' +' + i.plus + ' · bag slot ' + i.slot])];
-    const group = UI.group('Weapon enhancement');
-    group.append(UI.select('Weapon', weapons, () => this.selected?.slot ?? -1, slot => { this.select(slot); UI.draw(); }),
+    const c = () => this.cfg(), items = () => [[-1, 'Select an item from your bag'], ...World.items().filter(i => this.gear(i)).map(i => [i.slot, (i.name || Items.name(i.refObjId)) + ' +' + i.plus + ' · ' + this.kind(i) + ' · bag slot ' + i.slot])];
+    const elixirs = () => {
+      const kind = this.kind(this.item()) || 'weapon';
+      return [[0, 'Any compatible ' + kind + ' elixir'], ...[...new Map(World.items().filter(i => this.elixir(i, kind)).map(i => [i.refObjId, i.name || Items.name(i.refObjId)])).entries()]];
+    };
+    const group = UI.group('Item enhancement');
+    group.append(UI.select('Item', items, () => this.selected?.slot ?? -1, slot => { this.select(slot); UI.draw(); }),
       UI.number('Target +', () => c().target, n => c().target = n, 1, 250),
       UI.number('Maximum attempts', () => c().limit, n => c().limit = n, 1, 1000),
-      UI.select('Weapon elixir', () => [[0, 'Any compatible weapon elixir'], ...[...new Map(World.items().filter(i => this.elixir(i)).map(i => [i.refObjId, i.name || Items.name(i.refObjId)])).entries()]], () => c().elixir, value => c().elixir = Number(value)),
+      UI.select('Elixir', elixirs, () => c().elixir, value => c().elixir = Number(value)),
       UI.check('Use lucky powder of matching degree', () => c().powder, value => c().powder = value),
+      UI.number('Lucky powder from +', () => c().from.powder, n => c().from.powder = n, 0, 250),
       UI.row(UI.button('Start alchemy', () => this.start()), UI.button('Stop alchemy', () => this.stop())),
-      el('p', 'Keep the weapon in your bag and stop hunting/travel first. Each attempt spends a weapon elixir and, when enabled, matching lucky powder. Failures can reduce +, damage or destroy the weapon. Stop prevents the next attempt; a sent attempt may still finish. Unknown results pause without retrying.', 'muted'));
+      el('p', 'Works on weapons, shields, armour and accessories in your bag; stop hunting and travel first. Each attempt spends one elixir of the item\'s kind and, when enabled and from the plus you set, one lucky powder of its degree. A failure resets the + to 0 (to +4 with an Astral stone); from +5 a failure can also destroy the item half the time unless it has an Immortal charge, or damage it unless it has a Steady charge. Stop prevents the next attempt; a sent attempt may still finish. Unknown results pause without retrying.', 'muted'));
     UI.alchemyPreview = el('div', '', 'row'); UI.alchemyNote = el('p', '', 'muted'); group.append(UI.alchemyPreview, UI.alchemyNote); UI.pane.append(group);
+    const stones = UI.group('Stones that help and protect');
+    for (const [kind, s] of Object.entries(STONES)) stones.append(UI.check('Use ' + s.label + ' stones while enhancing', () => c().use[kind], v => c().use[kind] = v),
+      UI.number(s.label + ': keep this many charges on the item', () => c().stones[kind], n => c().stones[kind] = n, 1, STONE_MAX),
+      UI.number(s.label + ': from +', () => c().from[kind], n => c().from[kind] = n, 0, 250));
+    stones.append(UI.number('Stop after this many fusions (0 = no limit)', () => c().stoneLimit, n => c().stoneLimit = n, 0, 1000));
+    stones.append(UI.row(UI.button('Fuse stones now', () => this.start(true)), UI.button('Stop', () => this.stop())),
+      el('p', 'Each stone adds a charge to the item, up to 6. Tick Use for the stones you want. Before every attempt at or above the plus you set, if the item has fewer charges than you asked to keep, one is fused automatically from a stone of the item\'s degree in your bag. Luck adds 5% to the chance, Steady stops the durability damage and Immortal stops the destruction when an enhancement fails from +5, and Astral keeps +4 instead of resetting to 0 (it needs Immortal charges). A fusion can fail and use up the stone. Stops if a stone is missing, the game refuses, or when it reaches the fusion limit above (off by default). Fuse stones now ignores the plus and only fills the charges.', 'muted'));
+    UI.pane.append(stones);
+    const results = UI.group('Results');
+    UI.alchemyStats = el('p', '', 'muted'); UI.alchemyLog = el('p', '', 'muted');
+    results.append(UI.alchemyStats, UI.alchemyLog, UI.button('Clear results', () => { this.result = null; this.log.length = 0; this.refresh(); }));
+    UI.pane.append(results);
     this.refresh();
   },
   refresh() {
     if (UI.current !== 'Alchemy' || !UI.alchemyNote) return;
-    const item = this.item(), r = this.result;
-    UI.alchemyNote.textContent = this.message + (r ? `\nAttempts ${r.attempts} · Success ${r.successes} · Failed ${r.failures} · Elixirs used ${r.elixirs} · Powder used ${r.powders}` : '') +
-      `\nElixirs available: ${World.items().filter(i => this.elixir(i) && (!this.cfg().elixir || i.refObjId === this.cfg().elixir)).reduce((n, i) => n + i.quantity, 0)}` +
-      (this.cfg().powder ? ` · Matching powder: ${World.items().filter(i => this.powderDegree(i) === this.degree(item) && this.degree(item) > 0).reduce((n, i) => n + i.quantity, 0)}` : '');
+    const item = this.item(), r = this.result, c = this.cfg();
+    const fmt = n => !Number.isFinite(n) ? 'a huge number of' : n < 100 ? n.toFixed(n < 10 ? 1 : 0) : n < 1e6 ? Math.round(n).toLocaleString('en-US') : n.toExponential(1);
+    const attributes = item && this.gear(item) ? '\nStones on the item: ' + Object.entries(STONES).map(([kind, s]) => {
+      const have = this.attributesKnown(item) ? this.attributeCount(item, s.option) : '?', bag = World.items().filter(i => i.refObjId === s.base + this.degree(item) - 1 && i.quantity > 0).reduce((n, i) => n + i.quantity, 0);
+      return `${s.label} ${have}/${STONE_MAX} (${bag} in bag)`;
+    }).join(' · ') : '';
+    const odds = item && this.gear(item) ? this.odds(item, c) : null;
+    const chance = odds ? `\nNext attempt at +${item.plus}: ${odds.now}% to succeed.` + (odds.plan ? ` To reach +${odds.target} expect about ${fmt(odds.plan.attempts)} elixirs; the chance of getting there without a single failure is ${(odds.plan.clean * 100).toFixed(odds.plan.clean < .1 ? 2 : 0)}%.` : '') : '';
+    const kind = this.kind(item) || 'weapon';
+    const used = this.wanted(c).map(k => `${STONES[k].label} from +${this.from(k, c)} (keep ${this.keep(k, c)})`);
+    const helpers = '\nStones while enhancing: ' + (used.length ? used.join(' · ') : 'none ticked, so none are fused. Tick Use Luck, Steady, Immortal or Astral below.');
+    UI.alchemyNote.textContent = this.message + attributes + chance + helpers +
+      `\nElixirs available: ${World.items().filter(i => this.elixir(i, kind) && (!c.elixir || i.refObjId === c.elixir)).reduce((n, i) => n + i.quantity, 0)}` +
+      (c.powder ? ` · Matching powder: ${World.items().filter(i => this.powderDegree(i) === this.degree(item) && this.degree(item) > 0).reduce((n, i) => n + i.quantity, 0)}` : '');
+    if (UI.alchemyStats) {
+      UI.alchemyStats.textContent = r
+        ? `Attempts ${r.attempts} · Success ${r.successes} · Failed ${r.failures} · Destroyed ${r.destroyed || 0} · Highest + ${r.highest ?? 0}` + (r.attempts ? ` · Success rate ${Math.round(r.successes / r.attempts * 100)}%` : '') +
+          `\nUsed: elixirs ${r.elixirs} · powder ${r.powders} · stones ${Object.entries(STONES).map(([k, s]) => `${s.label} ${r.stonesUsed?.[k] || 0}`).join(' / ')}`
+        : 'No results yet.';
+      UI.alchemyLog.textContent = this.log.slice(-12).map(l => new Date(l.at).toLocaleTimeString('en-GB') + '  ' + l.text).join('\n');
+    }
     const key = item ? item.refObjId + ':' + item.plus + ':' + item.slot : '';
     if (UI.alchemyPreview.dataset.item !== key) {
       UI.alchemyPreview.dataset.item = key; UI.alchemyPreview.replaceChildren();
-      if (this.weapon(item)) {
+      if (this.gear(item)) {
         const icon = el('span', '', 'skill-icon'); Icons.paint(icon, item.icon || Items.iconDdj(item.refObjId));
         UI.alchemyPreview.append(icon, el('span', (item.name || Items.name(item.refObjId)) + ' +' + item.plus + (this.degree(item) ? ' · Degree ' + this.degree(item) : '')));
       }
@@ -5904,6 +7405,7 @@ const Alchemy = {
 };
 
 
+const RELEASE_NOTES = [{"version": "1.2.102", "title": "Fix false blocked-target rejections on normal terrain", "items": ["Removed a two-metre height-difference rejection from the horizontal collision query. Ordinary slopes no longer make nearby monsters look unreachable.", "Missing maps, search limits and failed initial route queries preserve the game's normal approach and targeting. A no-route abandonment now requires fresh state showing an actual sustained lack of movement and confirmed damage.", "Failed-approach memory applies only to the same monster. A failed enemy no longer excludes a different nearby enemy or a party-engaged target beside it."], "note": "This corrects the 1.2.101 targeting regression. Collision-checked detours and confirmed escape recovery remain enabled; live tree-interior recovery still needs gameplay validation."}, {"version": "1.2.101", "title": "Safer obstacle pursuit and confirmed escape recovery", "items": ["Blocked enemies are evaluated before repeated attack approaches. Failed routes retain movement control, stop and release the target, and use bounded retries with short-lived failed-approach memory.", "Detours use cached routes and short collision-checked steps. Party damage and position jitter no longer count as a successful detour, and ranged skills get a bounded trial instead of an assumed walking line-of-sight rule.", "Escape uses validated breadcrumbs or legal nearby steps, retries refused local sends, and requires fresh, stable arrival followed by a second move before resuming. No legal exit means a bounded stop instead of blind movement.", "Settings adds optional recovery recall and local detailed escape diagnostics, both off by default. Recovery recall completes town services and stops in town rather than reversing into the trap."], "note": "Live tree-contact recovery still needs controlled gameplay validation. This release does not change OpenSRO collision rules or provide a server-side teleport."}, {"version": "1.2.100", "title": "Alchemy helper stones: a simple Use switch for each", "items": ["Luck, Steady, Immortal and Astral now each have a Use switch. When it is ticked, the bot fuses a stone automatically before every attempt at or above the plus you set whenever the item has fewer charges than you asked it to keep, so the stones are used while enhancing without any extra clicking.", "Before, a helper only ran when its count was set above zero and the counts started at zero, which made it look as if the stones were never used. The counts now start at 1 and mean how many charges to keep, and old settings keep their helpers switched on.", "The Alchemy tab says which helpers it will use, from which plus and how many charges it keeps, or says that none are ticked."]}, {"version": "1.2.99", "title": "Alchemy tab: every gear kind, rules from +N, odds and a results log", "items": ["The Alchemy tab now enhances weapons, shields, armour and accessories, each with its own elixir (the A and B elixirs of its kind). Before, only weapons worked.", "Rules from a plus: use lucky powder from +N, and Luck, Steady, Immortal and Astral stones from +N. A missing charge is fused automatically from stones of the item's degree before the attempt, so you do not have to fuse them by hand. The defaults follow the server: Steady and Immortal from +5, where a failure can start to destroy or damage the item.", "The tab shows the real odds taken from the server's data: the chance of the next attempt (with powder and Luck counted like the server does) and how many elixirs you should expect to need to reach your target, and the chance of getting there without a single failure.", "A results panel with attempts, successes, failures, destroyed items, the highest plus reached, the success rate, what was used, and a timestamped log of each attempt and fusion."]}, {"version": "1.2.98", "title": "Auto skill upgrades can cover every learned skill", "items": ["New dropdown Skills to upgrade under Settings → Auto mastery and skills: Only skills in my rotations, buffs and imbue (the default, as before) or All skills I have learned. With All, the skills you use are raised first and then every other skill line you already have.", "It still only raises the next level of skills you have already learned, within the game's own rules (mastery level, strength, intelligence, prerequisites, skill points and your reserve). It never learns brand-new skills.", "The status line lists at most the first eight reasons, so a long skill list does not flood it."]}, {"version": "1.2.97", "title": "Auto skill upgrades say what they see", "items": ["The auto mastery and skills status now names each skill it is not raising and why: not learned yet, already at its highest level, mastery or strength too low, a prerequisite missing, or not enough skill points. It also says when your rotations, buffs and imbue hold no skills yet, and when the skills switch is off.", "The skill upgrades only cover skills you already learned that are in your attack rotations, buffs or imbue on the Combat tab. The dropdown that was called Spend skill points on is now Order when both are ticked, because it does nothing unless both switches are on.", "The bug report now includes this status line."]}, {"version": "1.2.96", "title": "Waits for a party resurrection before reviving itself", "items": ["Fixed: with Accept resurrection from party members on, the bot was meant to wait 20 seconds before reviving itself when a party member is around, but the check for a living helper was the wrong way round, so it only waited when the helper was dead. It now waits the 20 seconds whenever a living party member is in view.", "A helper seen in the last 15 seconds still counts, so a moment out of view does not cut the wait short.", "The Activity log now says what it is doing when the character dies, for example Died: waiting 20 s for a party member to resurrect before reviving."]}, {"version": "1.2.95", "title": "Notices a character that cannot move", "items": ["A character that should be walking (chasing, returning or picking up) but has not moved at all for 20 seconds, with nothing being damaged, is now treated as stuck, for example inside a tree. It first steps back to where it just was, then walks to the nearest open ground.", "If both fail, hunting stops with an alert chime and a clear message, instead of the character standing there for minutes. It does not use a return scroll on its own.", "When it happens the Activity log says whether the collision data thinks the character's tile is blocked, and the bug report shows the same, to help find why characters get stuck in trees.", "Settings → Obstacles switches it off or changes the 20 seconds. Tested on the simulated game only; not yet seen on the live server."]}];
 // Explicit report fields only: never export raw logs, profiles or game snapshots.
 const Diagnostics = {
   history: [], errors: [], last: '', started: false,
@@ -5965,18 +7467,18 @@ const Diagnostics = {
   },
   // Why nothing is being collected, counted from the drops in view. Counts only, no item names.
   noLoot() {
-    const why = { failed: 0, far: 0, area: 0, owner: 0, filter: 0, pet: 0, petFar: 0, full: 0 };
+    const why = { failed: 0, far: 0, area: 0, owner: 0, filter: 0, pet: 0, petFar: 0, full: 0 }, unwanted = {};
     let seen = 0, ready = 0;
     if (!World.pose()) return '';
     for (const e of World.ents.values()) {
       if (e.kind !== 'ground-item') continue;
       seen++;
       const reason = Loot.whyNot(e);
-      if (reason) why[reason]++; else ready++;
+      if (reason) { why[reason]++; if (reason === 'filter') { const k = Loot.filterWhy(e), u = unwanted[k] ||= { n: 0, ids: new Set() }; u.n++; u.ids.add(e.refObjId); } } else ready++;
     }
     if (!seen) return 'No drops in view.';
     const parts = [
-      [why.filter, 'its type is switched off in Loot, or it is excluded by name, or SoX only is on'],
+      [why.filter, 'not wanted by your Loot settings (' + Object.entries(unwanted).sort((a, b) => b[1].n - a[1].n).map(([k, u]) => `${u.n} ${Loot.filterLabel(k)}` + (u.ids.size <= 3 ? ' #' + [...u.ids].join(' #') : '')).join(', ') + ')'],
       [why.far, 'too far from you (Pickup radius)'],
       [why.area, 'outside the hunting area'],
       [why.owner, 'it belongs to another player'],
@@ -6002,6 +7504,11 @@ const Diagnostics = {
   },
   // What the town trip is doing right now, in plain words (no names): the phase text it shows on the panel.
   townDetail() { return Town.trip ? String(Town.message || '').slice(0, 200) : ''; },
+  // Why the current or last town trip started, with no item names, and how long ago.
+  townReason() {
+    const t = Town.trip ? { why: Town.trip.why, at: Town.trip.started } : Town.lastTrip;
+    return t ? String(t.why || '').replace(/\s*\(.*\)/, '') + ' (' + Math.round((now() - t.at) / 1000) + ' s ago)' : '';
+  },
   // Why no monster is being attacked, counted from the monsters in view with the same checks the hunt uses.
   // Counts only, no names. Short plain sentences, because the panel and diagnostics are read by many languages.
   noTarget() {
@@ -6033,6 +7540,8 @@ const Diagnostics = {
     return `Monsters in view: ${seen}. Skipped: ${parts.join('; ') || 'none'}.`;
   },
   main() {
+    if (Trap.run) return Trap.message;
+    if (Chase.owns()) return Chase.message || 'Checking obstacle approach.';
     if (BuffGear.run) return BuffGear.run.restoring ? 'Buff gear: restoring combat equipment.' : 'Buff gear: swapping or casting.';
     if (BuffGear.recovery) return 'Buff gear: manual equipment review needed.';
     if (Alchemy.pending) return Alchemy.run ? 'Alchemy: waiting for the server result.' : 'Alchemy stopped; outstanding result unconfirmed.';
@@ -6043,7 +7552,7 @@ const Diagnostics = {
     if (Town.trip) {
       if (Town.trip.phase === 'buy') return Town.trip.supplies.map(s => `Refilling ${s.kind === 'hp' ? 'HP' : s.kind === 'mp' ? 'MP' : 'abnormal pills'}: ${Restock.count(s.refObjId)} / ${s.target}`).join(' · ');
       if (World.gp?.inventoryPending) return 'Town services: waiting for inventory transaction.';
-      const phases = { recall: 'stopping combat for recall', 'recall-wait': 'waiting for recall arrival', 'reverse-wait': 'waiting for reverse arrival', 'revive-arrival': 'waiting for town revival', store: 'depositing loot', sell: 'selling pet loot', repair: 'repairing equipment', reverse: 'opening reverse return' };
+      const phases = { recall: 'stopping combat for recall', 'recall-wait': 'waiting for recall arrival', 'reverse-wait': 'waiting for reverse arrival', 'revive-arrival': 'waiting for town revival', store: 'depositing loot', sell: 'selling pet loot', ammo: 'buying ammunition', repair: 'repairing equipment', reverse: 'opening reverse return' };
       if (/^(walk|open)-/.test(Town.trip.phase) && Town.message) return Town.message;
       return 'Town services: ' + (phases[Town.trip.phase] || 'travelling between or opening services') + '.';
     }
@@ -6054,6 +7563,7 @@ const Diagnostics = {
     if (Hunt.state === 'resting' || Hunt.state === 'standing') return 'Recovering HP / MP.';
     if (Hunt.state === 'player') return 'Hunting paused by nearby-player setting.';
     if (Hunt.state === 'loot') return 'Character collecting; waiting for pickup confirmation.';
+    if (Hunt.threatNote && Hunt.threatNote.gid === Hunt.targetGid) return Hunt.threatNote.text;
     if (World.isCasting()) return 'Combat: waiting for the current cast.';
     if (Hunt.state === 'fight' && Combat.fallbackNote()) return 'Combat: normal attack (' + Combat.fallbackNote() + ').';
     if (Hunt.targetGid) return 'Combat: approaching or attacking the target.';
@@ -6062,7 +7572,7 @@ const Diagnostics = {
   snapshot() {
     const gp = World.gp, c = Settings.profile, pet = Loot.pet(), social = gp?.social, matching = gp?.partyMatching;
     return {
-      action: this.main(), partyStatus: this.party(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(),
+      action: this.main(), partyStatus: this.party(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(),
       navigationReady: !!Navigation.scene, navigationError: String(Navigation.error || '').slice(0, 80),
       buffGearActive: !!BuffGear.run, buffGearRestoring: !!BuffGear.run?.restoring, buffGearMovePending: !!BuffGear.run?.pending, buffGearRecovery: !!BuffGear.recovery,
       alchemyActive: !!Alchemy.run, alchemyPending: !!Alchemy.pending, alchemyAttempts: this.number(Alchemy.result?.attempts),
@@ -6097,7 +7607,7 @@ const Diagnostics = {
         hpTarget: this.number(Restock.cfg().hp.target), mpTarget: this.number(Restock.cfg().mp.target),
         buyCure: !!Restock.cfg().cure.on, cureTarget: this.number(Restock.cfg().cure.target), cureLow: this.number(Restock.cfg().cure.low),
         hpLow: this.number(Restock.cfg().hp.low), mpLow: this.number(Restock.cfg().mp.low),
-        collectDrops: !!c.hunt.pickup.enabled, petCollector: Loot.petMode(), pickupRadius: this.number(c.hunt.pickup.radius / 10),
+        collectDrops: !!c.hunt.pickup.enabled, petCollector: Loot.petMode(), autoMastery: AutoMastery.active() ? String(AutoMastery.message).slice(0, 600) : '', trapStage: Trap.stage, trapTile: Trap.stage ? Trap.tile : '', characterCollects: Loot.categories.some(k => c.hunt.pickup[k] && Loot.collectorFor(k) === 'character'), pickupRadius: this.number(c.hunt.pickup.radius / 10),
         finishFight: !!c.hunt.pickup.afterKillOnly, speedScroll: !!c.potion.speedScroll }
     };
   },
@@ -6131,6 +7641,382 @@ const Diagnostics = {
 };
 
 
+const ITEM_ACTIONS = ['store', 'sell', 'keep', 'drop'];
+const ITEM_ARMOUR_PART = { CA: 'Head', HA: 'Head', SA: 'Shoulder', BA: 'Chest', AA: 'Hand', LA: 'Trouser', FA: 'Boot' };
+const ITEM_ARMOUR_KIND = { CLOTHES: 'Garment', LIGHT: 'Protector', HEAVY: 'Armor' };
+const ITEM_WEAPON = { CH: { BLADE: 'Blade', SWORD: 'Sword', TBLADE: 'Glaive', SPEAR: 'Spear', BOW: 'Bow' },
+  EU: { SWORD: '1HSword', TSWORD: '2HSword', AXE: 'Axe', CROSSBOW: 'X-Bow', DAGGER: 'Dagger', TSTAFF: 'Staff', DARKSTAFF: 'W-Rod', STAFF: 'C-Rod', HARP: 'Harp' } };
+const ITEM_ACCESSORY = { NECKLACE: 'Necklace', EARRING: 'Earring', RING: 'Ring' };
+const ITEM_DROP_CONFIRM_MS = 5000;
+const ItemRules = {
+  infos: new Map(), dropping: null, dropBan: new Map(), message: '',
+  cfg() { return Settings.profile.items; },
+  get(id) { return this.cfg().rules[id] || null; },
+  // change: { pick: 'yes' | 'no' | null, act: 'store' | 'sell' | 'keep' | 'drop' | null }; null clears that part.
+  set(ids, change) {
+    const rules = this.cfg().rules;
+    for (const id of ids) {
+      const rule = { ...rules[id] };
+      for (const [key, value] of Object.entries(change)) { if (value === null) delete rule[key]; else rule[key] = value; }
+      if (rule.act === 'drop') delete rule.pick; // a dropped item is never picked up again
+      if (Object.keys(rule).length) rules[id] = rule; else delete rules[id];
+    }
+    Settings.saveProfile();
+  },
+  count() { return Object.keys(this.cfg().rules).length; },
+  // What the codename says about an item, for the filters and the table. Cached per item.
+  info(id) {
+    if (this.infos.has(id)) return this.infos.get(id);
+    const row = Items.data.get(id), code = row?.code || '', p = code.split('_');
+    const race = p[1] === 'CH' || p[1] === 'EU' ? p[1] : '', gendered = race && (p[2] === 'M' || p[2] === 'W');
+    const type = race ? p[gendered ? 3 : 2] : '', degree = race ? Number(/_(\d{2})(?:_|$)/.exec(code)?.[1]) || 0 : 0;
+    let group = 'other', kind = '';
+    if (race && ITEM_ARMOUR_KIND[type]) { group = 'armour'; kind = ITEM_ARMOUR_PART[p[gendered ? 5 : 4]] || ''; }
+    else if (race && type === 'SHIELD') { group = 'armour'; kind = 'Shield'; }
+    else if (race && ITEM_WEAPON[race][type]) { group = 'weapon'; kind = ITEM_WEAPON[race][type]; }
+    else if (race && ITEM_ACCESSORY[type]) { group = 'accessory'; kind = ITEM_ACCESSORY[type]; }
+    else if (/^ITEM_ETC_(HP|MP|ALL)_/.test(code)) group = 'potion';
+    else if (/^ITEM_ETC_CURE_/.test(code)) group = 'pill';
+    else if (/^ITEM_ETC_ARCHEMY_/.test(code)) group = 'alchemy';
+    else if (/^ITEM_ETC_AMMO_/.test(code)) group = 'ammo';
+    else if (/SCROLL/.test(code)) group = 'scroll';
+    else if (/^ITEM_COS_/.test(code)) group = 'pet';
+    else if (/^ITEM_Q/.test(code)) group = 'quest';
+    else if (/^ITEM_MALL_/.test(code)) group = 'mall';
+    const info = { id, name: row?.name || '#' + id, code, icon: row?.icon || '', race, degree, group, kind,
+      material: race ? ITEM_ARMOUR_KIND[type] || '' : '', gender: gendered ? (p[2] === 'M' ? 'Male' : 'Female') : '', sox: Items.sox(id) };
+    this.infos.set(id, info);
+    return info;
+  },
+  // Every catalogue item that passes the filters, in id order. f: { query, group, race, gender, degrees: Set, kind, custom, nearby }.
+  list(f) {
+    const query = (f.query || '').toLowerCase().trim(), rules = this.cfg().rules, out = [];
+    // Item numbers of the drops in view: the exact items to give a rule, whatever the item is called in the catalogue.
+    const ground = f.nearby ? new Set([...World.ents.values()].filter(e => e.kind === 'ground-item').map(e => e.refObjId)) : null;
+    for (const id of Items.data.keys()) {
+      if (f.custom && !rules[id]) continue;
+      if (ground && !ground.has(id)) continue;
+      const i = this.info(id);
+      if (f.group && f.group !== 'all' && (f.group === 'equipment' ? !['weapon', 'armour', 'accessory'].includes(i.group) : i.group !== f.group)) continue;
+      if (f.race && i.race !== f.race) continue;
+      if (f.gender && i.gender && i.gender !== f.gender) continue;
+      if (f.degrees?.size && !f.degrees.has(i.degree)) continue;
+      if (f.kind && i.kind !== f.kind && i.material !== f.kind) continue;
+      if (query && !i.name.toLowerCase().includes(query) && !i.code.toLowerCase().includes(query) && String(id) !== query) continue;
+      out.push(i);
+    }
+    return out.sort((a, b) => a.id - b.id);
+  },
+  // Drop items with a Drop rule from the character bag (never worn gear) or the pickup pet, one at a time, while
+  // hunting and outside town service and open windows. A drop counts once the item has left that slot.
+  dropTick() {
+    const gp = World.gp;
+    if (!Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
+    const t = now(), d = this.dropping;
+    if (d) {
+      const still = (d.pet ? Loot.items(d.pet) : World.items()).some(i => i.slot === d.slot && i.refObjId === d.ref);
+      if (!still) { this.dropping = null; Log.info('Dropped ' + Items.name(d.ref) + ' (item rule).'); }
+      else if (t - d.at < ITEM_DROP_CONFIRM_MS) return false;
+      else { this.dropping = null; this.dropBan.set(d.key, t + 30000); this.message = Items.name(d.ref) + ' was not dropped; trying again in 30 s.'; Log.warn(this.message); }
+    }
+    if (!this.count()) return false;
+    const equipped = gp.equipmentSlotCount || 13, pet = Loot.pet();
+    const sources = [[0, World.items().filter(i => i.slot >= equipped)], ...(pet ? [[pet.rec.gid, pet.rec.inventory || []]] : [])];
+    for (const [petGid, items] of sources) for (const item of items) {
+      if (this.get(item.refObjId)?.act !== 'drop') continue;
+      const key = petGid + ':' + item.slot + ':' + item.refObjId;
+      if ((this.dropBan.get(key) || 0) > t) continue;
+      const command = petGid ? { kind: 'cos-drop', gid: petGid, slot: item.slot } : { kind: 'item-drop', slot: item.slot };
+      if (!Cmd.spaced(command.kind) || !Cmd.raw(command, 'Drop ' + Items.name(item.refObjId))) return false;
+      this.dropping = { key, pet: petGid, slot: item.slot, ref: item.refObjId, at: t };
+      return true;
+    }
+    return false;
+  },
+};
+
+
+// Map page: the game's own minimap tiles on a canvas, with the hunting area, monsters, party and players.
+// Outdoors only: positions become absolute units (region x * 1920 + x, region z * 1920 + z; Z grows north, drawn up).
+// One minimap tile (minimap/<rx>x<rz>, 256 px) covers one 1920-unit region. Dungeons have no tiles here yet.
+// The live game ships tiles as .texture (NTX1: DXT-compressed, decoded here); older builds as .png.
+// It only reads game state; the one setting it changes is the hunting spot, and only when the player asks.
+const MAP_ART = '/assets/images/Media_extracted/';
+// Monster class colours, as the game's own map window draws them.
+const MAP_CLASS_COLOR = { normal: '#e0e0e0', champion: '#7fb8ff', giant: '#ffd65a', party: '#ff9b4a', elite: '#c78bff', unique: '#ff5a5a', titan: '#ff3dd0' };
+const LeanMap = {
+  upp: 5, // world units per screen pixel (10 units = 1 m)
+  view: null, follow: true, picked: null, canvas: null, info: null, timer: 0,
+  tiles: new Map(), signs: new Map(),
+  space(p) {
+    const rid = Number(p?.regionId ?? p?.region);
+    if (!isNum(rid) || !isNum(p.x) || !isNum(p.z) || rid & DUNGEON) return null;
+    return { X: (rid & 255) * SECTOR + p.x, Z: (rid >>> 8) * SECTOR + p.z };
+  },
+  local(X, Z) {
+    const rx = Math.floor(X / SECTOR), rz = Math.floor(Z / SECTOR);
+    if (rx < 0 || rx > 255 || rz < 0 || rz > 127) return null;
+    return { regionId: (rz << 8) | rx, x: X - rx * SECTOR, z: Z - rz * SECTOR };
+  },
+  // A tile or sign image, loaded once from the game's packs. Missing tiles (open sea) are remembered quietly.
+  image(cache, path) {
+    const hit = cache.get(path);
+    if (hit) return hit.img;
+    const entry = { img: null }; cache.set(path, entry);
+    const load = cache === this.tiles ? this.tile(path) : Icons.request(path).then(blob => createImageBitmap(blob));
+    load.then(img => { entry.img = img; this.dirty = true; }, e => {
+      entry.missing = true;
+      if (!/not found in the game packs/i.test(e?.message || '') && e?.message !== this.lastTileError) { this.lastTileError = e?.message; Log.warn('Map tile ' + path + ': ' + e?.message); }
+    });
+    if (cache === this.tiles && cache.size > 80) for (const [key, value] of cache) { if (cache.size <= 60) break; if (key !== path) { value.img?.close?.(); cache.delete(key); } }
+    return null;
+  },
+  // A tile: the .texture the live game publishes, else the .png of older builds. Resolves to a drawable or null.
+  async tile(path) {
+    try { return await this.ntxImage(new Uint8Array(await (await Icons.request(path + '.texture')).arrayBuffer())); }
+    catch (e) { if (!/not found in the game packs/i.test(e.message)) throw e; }
+    const blob = await Icons.request(path + '.png');
+    return createImageBitmap(blob);
+  },
+  // NTX1 header (20 bytes, little endian): magic, width, height, format (21 = BGRA, DXT1/3/5 four-cc), mip count;
+  // then the mips, largest first. Only the first mip is drawn. Same layout as the game client's native textures.
+  ntxImage(bytes) {
+    const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes.length < 20 || v.getUint32(0, true) !== 0x3158544e) throw Error('not a native texture');
+    const w = v.getUint32(4, true), h = v.getUint32(8, true), code = v.getUint32(12, true);
+    if (!w || !h || w > 2048 || h > 2048) throw Error('bad texture size');
+    const out = new ImageData(w, h), px = out.data, blocks = { 0x31545844: 8, 0x33545844: 16, 0x35545844: 16 }[code];
+    if (code === 21) {
+      if (bytes.length < 20 + w * h * 4) throw Error('truncated texture');
+      for (let i = 0; i < w * h * 4; i += 4) { px[i] = bytes[20 + i + 2]; px[i + 1] = bytes[20 + i + 1]; px[i + 2] = bytes[20 + i]; px[i + 3] = bytes[20 + i + 3]; }
+      return createImageBitmap(out);
+    }
+    if (!blocks) throw Error('unsupported texture format');
+    const cols = Math.ceil(w / 4), rows = Math.ceil(h / 4);
+    if (bytes.length < 20 + cols * rows * blocks) throw Error('truncated texture');
+    const pal = new Uint8Array(16);
+    for (let by = 0; by < rows; by++) for (let bx = 0; bx < cols; bx++) {
+      const at = 20 + (by * cols + bx) * blocks, color = at + (blocks === 16 ? 8 : 0);
+      const c0 = v.getUint16(color, true), c1 = v.getUint16(color + 2, true), three = blocks === 8 && c0 <= c1;
+      for (let k = 0; k < 2; k++) {
+        const c = k ? c1 : c0, r = c >> 11, g = (c >> 5) & 63, b = c & 31;
+        pal[k * 4] = (r << 3) | (r >> 2); pal[k * 4 + 1] = (g << 2) | (g >> 4); pal[k * 4 + 2] = (b << 3) | (b >> 2); pal[k * 4 + 3] = 255;
+      }
+      for (let ch = 0; ch < 3; ch++) {
+        const a = pal[ch], b = pal[4 + ch];
+        pal[8 + ch] = Math.floor(three ? (a + b) / 2 : (2 * a + b) / 3);
+        pal[12 + ch] = three ? 0 : Math.floor((a + 2 * b) / 3);
+      }
+      pal[11] = 255; pal[15] = three ? 0 : 255;
+      const sel = v.getUint32(color + 4, true);
+      for (let p = 0; p < 16; p++) {
+        const x = bx * 4 + (p & 3), y = by * 4 + (p >> 2);
+        if (x >= w || y >= h) continue;
+        const s = ((sel >>> (p * 2)) & 3) * 4, o = (y * w + x) * 4;
+        px[o] = pal[s]; px[o + 1] = pal[s + 1]; px[o + 2] = pal[s + 2]; px[o + 3] = pal[s + 3];
+        if (code === 0x33545844) px[o + 3] = ((bytes[at + (p >> 1)] >>> ((p & 1) * 4)) & 15) * 17;
+        else if (code === 0x35545844) px[o + 3] = this.dxt5Alpha(bytes, at, p);
+      }
+    }
+    return createImageBitmap(out);
+  },
+  dxt5Alpha(bytes, at, p) {
+    const a0 = bytes[at], a1 = bytes[at + 1], bit = p * 3, byte = at + 2 + (bit >> 3);
+    const s = ((bytes[byte] | ((bytes[byte + 1] ?? 0) << 8)) >>> (bit & 7)) & 7;
+    if (s === 0) return a0;
+    if (s === 1) return a1;
+    if (a0 > a1) return Math.floor(((8 - s) * a0 + (s - 1) * a1) / 7);
+    if (s === 6) return 0;
+    if (s === 7) return 255;
+    return Math.floor(((6 - s) * a0 + (s - 1) * a1) / 5);
+  },
+  sign(name) { return this.image(this.signs, MAP_ART + 'interface/minimap/mm_sign_' + name + '.png'); },
+  draw(parent) {
+    const box = UI.group('Map');
+    box.classList.add('map-box');
+    const stage = el('div', null, 'map-stage');
+    this.canvas = el('canvas'); this.canvas.setAttribute('aria-label', 'Map of the hunting area');
+    const zoomIn = UI.button('+', () => this.zoom(1 / 1.5)), zoomOut = UI.button('−', () => this.zoom(1.5));
+    zoomIn.setAttribute('aria-label', 'Zoom in'); zoomOut.setAttribute('aria-label', 'Zoom out');
+    this.followButton = UI.button('Follow me', () => { this.follow = true; this.view = null; this.dirty = true; });
+    const tools = el('div', null, 'map-tools'); tools.append(zoomIn, zoomOut, this.followButton);
+    this.coords = el('div', '', 'map-coords');
+    stage.append(this.canvas, tools, this.coords);
+    this.info = el('p', '', 'muted');
+    this.pickRow = UI.row(UI.button('Make this the hunting spot', () => this.setCentre()), UI.button('Clear mark', () => { this.picked = null; this.dirty = true; this.render(); }));
+    box.append(stage, this.info, this.pickRow);
+    const H = () => Settings.profile.hunt;
+    const area = UI.group('Hunting area',
+      UI.button('Set hunting spot here', () => { if (World.inWorld() && Hunt.setCenter()) { UI.toast('Hunting spot saved.'); this.dirty = true; } }),
+      UI.number('Hunt radius (m)', () => H().radius / 10, v => { H().radius = v * 10; this.dirty = true; }, 5, 200),
+      UI.number('Chase distance (m)', () => H().chase / 10, v => { H().chase = v * 10; this.dirty = true; }, 10, 300));
+    const legend = UI.group('Legend');
+    for (const [name, label] of [['character', 'You'], ['party', 'Party member'], ['otherplayer', 'Other player'], ['monster', 'Monster'], ['unique', 'Unique'], ['npc', 'NPC'], ['animal', 'Pet']]) {
+      const row = el('div', null, 'map-legend'), mark = el('i'); mark.dataset.sign = name;
+      row.append(mark, el('span', label)); legend.append(row);
+    }
+    legend.append(el('p', 'Yellow circle: hunt radius. Dashed ring: chase distance. Click the map to mark a point, drag to move it, use + and − to zoom.', 'muted'));
+    parent.append(box, area, legend);
+    for (const mark of legend.querySelectorAll('i[data-sign]')) this.paintSign(mark, mark.dataset.sign);
+    this.bind(); this.dirty = true; this.render();
+    clearInterval(this.timer); this.timer = setInterval(() => this.tick(), 200);
+  },
+  paintSign(node, name) {
+    Icons.url(MAP_ART + 'interface/minimap/mm_sign_' + name + '.png').then(url => { if (url && node.isConnected) node.style.backgroundImage = `url("${url}")`; });
+  },
+  bind() {
+    const c = this.canvas;
+    c.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      this.drag = { x: e.clientX, y: e.clientY, view: this.view && { ...this.view }, moved: false };
+      c.setPointerCapture(e.pointerId);
+    });
+    c.addEventListener('pointermove', e => {
+      const at = this.toWorld(e);
+      const local = at && this.local(at.X, at.Z), shown = local && displayCoords(local);
+      this.coords.textContent = shown ? `X ${shown.x} · Y ${shown.y}` : '';
+      const d = this.drag;
+      if (!d || !d.view) return;
+      const dx = e.clientX - d.x, dy = e.clientY - d.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) d.moved = true;
+      if (d.moved) { this.follow = false; this.view = { X: d.view.X - dx * this.upp, Z: d.view.Z + dy * this.upp }; this.dirty = true; }
+    });
+    const up = e => {
+      const d = this.drag; this.drag = null;
+      if (!d || d.moved || e.type === 'pointercancel') return;
+      const at = this.toWorld(e), local = at && this.local(at.X, at.Z);
+      if (local) { this.picked = local; this.dirty = true; this.render(); }
+    };
+    c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
+    c.addEventListener('wheel', e => { e.preventDefault(); this.zoom(e.deltaY > 0 ? 1.25 : 0.8); }, { passive: false });
+  },
+  toWorld(e) {
+    if (!this.view) return null;
+    const r = this.canvas.getBoundingClientRect();
+    return { X: this.view.X + (e.clientX - r.left - r.width / 2) * this.upp, Z: this.view.Z - (e.clientY - r.top - r.height / 2) * this.upp };
+  },
+  zoom(f) { this.upp = clamp(this.upp * f, 1.5, 30); this.dirty = true; },
+  setCentre() {
+    const pt = this.picked, pose = World.pose();
+    if (!pt || !World.inWorld()) return;
+    // The height of a map point is unknown; the character's current height is used, as the game's own map does.
+    Settings.profile.hunt.center = { regionId: pt.regionId, x: Math.round(pt.x), y: Number(pose?.y) || 0, z: Math.round(pt.z) };
+    Settings.saveProfile(); bus.emit('center');
+    this.picked = null; this.dirty = true;
+    UI.toast('Hunting spot set on the map.'); this.render();
+  },
+  tick() {
+    if (!this.canvas?.isConnected) { clearInterval(this.timer); this.timer = 0; return; }
+    if (UI.minimised || document.hidden) return;
+    this.dirty = true;
+    // One message per distinct error, so a drawing problem shows in the log instead of failing silently every 200 ms.
+    try { this.render(); } catch (e) { if (e.message !== this.lastError) { this.lastError = e.message; Log.warn('Map: ' + e.message); } }
+  },
+  render() {
+    const c = this.canvas;
+    if (!c?.isConnected || !this.dirty) return;
+    this.dirty = false;
+    const w = c.clientWidth, h = c.clientHeight;
+    if (!w || !h) return;
+    const ratio = W.devicePixelRatio || 1;
+    if (c.width !== Math.round(w * ratio) || c.height !== Math.round(h * ratio)) { c.width = Math.round(w * ratio); c.height = Math.round(h * ratio); }
+    const ctx = c.getContext('2d'); ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.fillStyle = '#0b0d0a'; ctx.fillRect(0, 0, w, h);
+    const pose = World.inWorld() ? World.pose() : null, me = this.space(pose);
+    this.followButton.disabled = this.follow && !!me;
+    this.pickRow.hidden = !this.picked;
+    if (!pose) { this.note(ctx, w, h, 'Waiting for the game…'); this.info.textContent = ''; return; }
+    if (!me) { this.note(ctx, w, h, 'There is no map for dungeons yet.'); this.info.textContent = ''; return; }
+    if (this.follow || !this.view) this.view = { X: me.X, Z: me.Z };
+    const upp = this.upp, v = this.view;
+    const sx = X => w / 2 + (X - v.X) / upp, sy = Z => h / 2 - (Z - v.Z) / upp;
+    // Minimap tiles under the visible box.
+    const x0 = v.X - w / 2 * upp, x1 = v.X + w / 2 * upp, z0 = v.Z - h / 2 * upp, z1 = v.Z + h / 2 * upp;
+    for (let rx = Math.max(0, Math.floor(x0 / SECTOR)); rx <= Math.min(255, Math.floor(x1 / SECTOR)); rx++)
+      for (let rz = Math.max(0, Math.floor(z0 / SECTOR)); rz <= Math.min(127, Math.floor(z1 / SECTOR)); rz++) {
+        const img = this.image(this.tiles, `${MAP_ART}minimap/${rx}x${rz}`);
+        if (!img) continue;
+        const l = Math.floor(sx(rx * SECTOR)), t = Math.floor(sy((rz + 1) * SECTOR));
+        ctx.drawImage(img, l, t, Math.ceil(sx((rx + 1) * SECTOR)) - l, Math.ceil(sy(rz * SECTOR)) - t);
+      }
+    // Hunting area: radius (filled) and chase distance (dashed).
+    const H = Settings.profile.hunt, centre = this.space(H.center);
+    if (centre) {
+      const cx = sx(centre.X), cy = sy(centre.Z);
+      ctx.save();
+      ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(255,214,90,.55)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, (Number(H.chase) || 0) / upp, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillStyle = 'rgba(255,214,90,.12)'; ctx.strokeStyle = 'rgba(255,214,90,.95)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy, (Number(H.radius) || 0) / upp, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffd65a'; ctx.fillRect(cx - 2.5, cy - 2.5, 5, 5);
+      ctx.restore();
+    }
+    // Entities in view. Party members are drawn from the party list too, so ones out of sight still show.
+    const social = World.gp?.social, party = new Set((social?.members || []).map(m => m?.name).filter(Boolean));
+    const target = World.gp?.target, local = World.localGid(), drawn = new Set();
+    const put = (name, x, y, size, fallback) => {
+      const img = this.sign(name);
+      if (img) ctx.drawImage(img, Math.round(x - size / 2), Math.round(y - size / 2), size, size);
+      else { ctx.fillStyle = fallback; ctx.beginPath(); ctx.arc(x, y, size / 3, 0, Math.PI * 2); ctx.fill(); }
+    };
+    let monsters = 0, players = 0;
+    for (const e of World.ents.values()) {
+      if (!e || e.gid === local || e.kind === 'local-player') continue;
+      const s = this.space(e);
+      if (!s) continue;
+      const x = sx(s.X), y = sy(s.Z);
+      if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
+      if (e.kind === 'monster') {
+        if (!World.isAlive(e)) continue;
+        monsters++;
+        const cls = monsterClass(e);
+        if (e.rarity === 3) put('unique', x, y, 13, MAP_CLASS_COLOR.unique);
+        else if (cls === 'normal') put('monster', x, y, 8, MAP_CLASS_COLOR.normal);
+        else { ctx.fillStyle = MAP_CLASS_COLOR[cls] || '#fff'; ctx.beginPath(); ctx.arc(x, y, cls === 'champion' ? 3.5 : 4.5, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke(); }
+      } else if (e.kind === 'player') {
+        players++;
+        const member = party.has(e.name); if (member) drawn.add(e.name);
+        put(member ? 'party' : 'otherplayer', x, y, 9, member ? '#5aff7a' : '#5ab4ff');
+        if (upp <= 4 && e.name) this.label(ctx, e.name, x + 7, y - 4, member ? '#9dff9d' : '#cfe8ff');
+      } else if (e.kind === 'npc') put('npc', x, y, 9, '#f0f0a0');
+      else if (e.kind === 'cos') put('animal', x, y, 9, '#c8a2ff');
+      else continue;
+      if (e.gid === target) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.stroke(); }
+    }
+    for (const m of social?.members || []) {
+      if (!m || m.id === social.self || drawn.has(m.name) || m.name === social.localName) continue;
+      const s = this.space(m);
+      if (!s) continue;
+      put('party', clamp(sx(s.X), 6, w - 6), clamp(sy(s.Z), 6, h - 6), 9, '#5aff7a');
+    }
+    // A marked point (click), then you on top. Heading 0 = east, counter-clockwise; the sign points east.
+    if (this.picked) {
+      const s = this.space(this.picked), x = sx(s.X), y = sy(s.Z);
+      ctx.strokeStyle = '#6fc1ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x - 11, y); ctx.lineTo(x + 11, y); ctx.moveTo(x, y - 11); ctx.lineTo(x, y + 11); ctx.stroke();
+    }
+    const mx = clamp(sx(me.X), 8, w - 8), my = clamp(sy(me.Z), 8, h - 8), img = this.sign('character');
+    ctx.save(); ctx.translate(mx, my); ctx.rotate(-((Number(pose.angle) || 0) / 65535) * Math.PI * 2);
+    if (img) ctx.drawImage(img, -8, -8, 16, 16); else { ctx.fillStyle = '#fff'; ctx.fillRect(-4, -4, 8, 8); }
+    ctx.restore();
+    // Scale bar.
+    const metres = [10, 20, 50, 100, 200, 500].find(m => m * 10 / upp >= 60) || 500, bar = metres * 10 / upp;
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(w - bar - 18, h - 22, bar + 12, 16);
+    ctx.fillStyle = '#efdaa4'; ctx.fillRect(w - bar - 12, h - 12, bar, 2); this.label(ctx, metres + ' m', w - bar - 12, h - 15, '#efdaa4');
+    const shown = displayCoords(pose), distance = H.center ? dist2D(pose, H.center) : Infinity;
+    const pick = this.picked && displayCoords(this.picked);
+    this.info.textContent = `You: X ${shown.x} · Y ${shown.y}. Hunting spot: ${Number.isFinite(distance) ? Math.round(distance / 10) + ' m away' : H.center ? 'another region' : 'not saved'}. In view: ${monsters} monsters, ${players} players.`
+      + (pick ? ` Marked point: X ${pick.x} · Y ${pick.y}.` : '');
+  },
+  label(ctx, text, x, y, color) {
+    ctx.font = '11px Arial'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.strokeText(text, x, y); ctx.fillStyle = color; ctx.fillText(text, x, y);
+  },
+  note(ctx, w, h, text) {
+    ctx.font = '12px Arial'; ctx.textAlign = 'center'; ctx.fillStyle = '#a09b8c'; ctx.fillText(text, w / 2, h / 2); ctx.textAlign = 'start';
+  },
+};
+
+
 function el(tag, text, className = '') {
   const node = document.createElement(tag);
   if (text !== undefined && text !== null) node.textContent = String(text);
@@ -6142,6 +8028,7 @@ const UI = {
   current: 'Combat', combatTab: 'Skills', refreshers: [], lastSkillKey: '',
   toast(message, level = 'info', ms = 5000) {
     Log.add(level, message);
+    if (level === 'warn' || level === 'error' || /^SoX found/.test(message)) this.alertOrb(message);
     if (!this.feedback) return;
     this.feedback.textContent = message;
     this.feedback.style.color = level === 'warn' || level === 'error' ? '#ffc67a' : '#b5e5bd';
@@ -6160,6 +8047,29 @@ const UI = {
     this.diagnosticText.focus(); this.diagnosticText.select();
     this.toast('Clipboard unavailable—copy the selected diagnostics.');
   },
+  // Patch notes beside the panel, newest first. Plain text only; it never pauses the bot. Returns false before mount.
+  showNotes(notes = RELEASE_NOTES, title = 'Patch notes') {
+    if (!this.root || !notes.length) return false;
+    const close = () => { this.notesBox.hidden = true; };
+    const releases = notes.map(n => {
+      const box = el('div', null, 'release'), list = el('ul');
+      list.append(...n.items.map(item => el('li', item)));
+      box.append(el('strong', n.version + ' · ' + n.title), list);
+      if (n.note) box.append(el('p', n.note, 'muted'));
+      return box;
+    });
+    this.notesBox?.remove();
+    this.notesBox = this.windowFrame(title, close,
+      ...releases, this.row(this.button('Got it', close)));
+    this.notesBox.classList.add('patch-notes');
+    this.root.append(this.notesBox);
+    // Beside the panel (left if there is room, else right), never over the middle of the game.
+    const panel = this.root.host.getBoundingClientRect(), width = Math.min(430, innerWidth - 8);
+    this.notesBox.style.left = (panel.left - width - 8 >= 0 ? panel.left - width - 8 : panel.right + 8) + 'px';
+    this.notesBox.style.top = Math.max(4, panel.top) + 'px';
+    this.fitWindow(this.notesBox); this.front(this.notesBox);
+    return true;
+  },
   // A draggable in-page window in the panel's skin. Lives in the same shadow root, so typing is protected like the panel.
   windowFrame(title, onClose, ...children) {
     const win = el('section', null, 'panel dialog'), header = el('header');
@@ -6169,8 +8079,11 @@ const UI = {
     for (const corner of ['lu', 'mu', 'ru', 'ls', 'rs', 'ld', 'md', 'rd']) win.append(el('div', null, 'frame ' + corner));
     win.append(header, body);
     this.dragBy(header, win);
+    win.addEventListener('pointerdown', () => this.front(win));
     return win;
   },
+  // The window opened or touched last is drawn above the others.
+  front(win) { win.style.zIndex = String(10 + (this.zTop = (this.zTop || 0) + 1)); },
   // Keep a floating window fully on screen after a resize or when it is re-shown.
   fitWindow(win) {
     if (!win || win.hidden) return;
@@ -6178,7 +8091,7 @@ const UI = {
     win.style.left = clamp(r.left, 0, Math.max(0, innerWidth - r.width)) + 'px';
     win.style.top = clamp(r.top, 0, Math.max(0, innerHeight - r.height)) + 'px';
   },
-  dragBy(header, target) {
+  dragBy(header, target, onDone) {
     header.addEventListener('pointerdown', e => {
       if (e.button !== 0 || e.target.closest('button')) return;
       const start = target.getBoundingClientRect(), origin = { x: e.clientX, y: e.clientY };
@@ -6188,7 +8101,7 @@ const UI = {
         target.style.left = clamp(start.left + event.clientX - origin.x, 0, Math.max(0, innerWidth - start.width)) + 'px';
         target.style.top = clamp(start.top + event.clientY - origin.y, 0, Math.max(0, innerHeight - 34)) + 'px';
       };
-      const done = () => { header.removeEventListener('pointermove', move); header.removeEventListener('pointerup', done); header.removeEventListener('pointercancel', done); };
+      const done = () => { onDone?.(); header.removeEventListener('pointermove', move); header.removeEventListener('pointerup', done); header.removeEventListener('pointercancel', done); };
       header.addEventListener('pointermove', move); header.addEventListener('pointerup', done); header.addEventListener('pointercancel', done);
     });
   },
@@ -6289,23 +8202,243 @@ const UI = {
     style.textContent = ':host{' + Object.entries(LEAN_SKIN).map(([key, data]) => `--s-${key}:url("${data}");`).join('') + '}\n' + LEAN_CSS + '\n:host([hidden]){display:none!important}';
     style.textContent += '\n.status{height:98px;overflow:hidden}\n.waiting{height:48px;overflow:hidden}';
     const panel = el('section', null, 'panel'), header = el('header');
-    const fold = this.button('−', () => { this.body.hidden = !this.body.hidden; fold.textContent = this.body.hidden ? '+' : '−'; });
-    fold.className = 'fold'; fold.setAttribute('aria-label', 'Fold or unfold bot window');
-    header.title = 'Shift+F7 hides or shows the whole window; F7 folds it.';
-    header.append(el('strong', 'OpenSRO Bot ' + VERSION), fold);
+    const fold = this.button('×', () => this.minimise(true));
+    fold.className = 'fold'; fold.setAttribute('aria-label', 'Minimise bot window'); fold.title = 'Minimise (the bot keeps running)';
+    header.title = 'The × minimises the window to a small icon; F7 folds it; Shift+F7 hides or shows everything.';
+    const version = this.button(VERSION, () => this.showNotes());
+    version.className = 'version'; version.title = 'What’s new: patch notes';
+    const name = el('strong', 'OpenSRO Bot '); name.append(version);
+    this.layoutButton = this.button('Wide', () => this.setWide(!this.wide));
+    this.layoutButton.className = 'layout'; this.layoutButton.title = 'Switch between the wide and the compact window';
+    header.append(name, this.layoutButton, fold);
     this.body = el('div', null, 'body'); this.status = el('div', 'Waiting for game…', 'status'); this.status.setAttribute('role', 'status');
+    this.updateNote = el('div', '', 'update-note'); this.updateNote.hidden = true;
     const controls = this.row(this.button('Start / stop · F8', () => toggleBot()), this.button('Return & hunt', () => WalkBack.start(true)), this.button('Stop all', () => stopAll()));
     controls.classList.add('controls');
     this.nav = el('nav'); this.nav.setAttribute('aria-label', 'Bot settings');
-    for (const name of ['Combat', 'Loot', 'Supplies', 'Alchemy', 'Wardrobe', 'Settings']) this.nav.append(this.button(name, () => { this.current = name; this.draw(); }));
+    // Page icons are the game's own action-bar icons; they show only in the wide window's page list.
+    const navIcons = { Items: 'action\\cos_cmd_inventory', Party: 'action\\icon_cha_party', Combat: 'action\\icon_cha_auto_attack', Loot: 'action\\icon_cha_autoget', Supplies: 'action\\icon_cha_recovery', Town: 'item\\etc\\mall_return_scroll',
+      Alchemy: 'action\\icon_cha_alchemy', Wardrobe: 'action\\icon_cha_shop', Settings: 'action\\icon_cha_helper' };
+    for (const name of ['Map', 'Combat', 'Party', 'Loot', 'Items', 'Supplies', 'Town', 'Alchemy', 'Wardrobe', 'Settings']) {
+      const tab = this.button(name, () => { this.current = name; this.draw(); });
+      if (name === 'Map') this.paintPath(tab, MAP_ART + 'interface/minimap/mm_map_button.png');
+      else Icons.paint(tab, navIcons[name] + '.ddj');
+      this.nav.append(tab);
+    }
     this.pane = el('div', null, 'pane'); this.feedback = el('div', null, 'feedback'); this.feedback.setAttribute('role', 'status');
     this.waitNote = el('div', '', 'waiting'); this.waitNote.setAttribute('role', 'status');
-    this.body.append(this.status, this.waitNote, controls, this.nav, this.pane, this.feedback);
+    this.body.append(this.updateNote, this.makeStrip(), this.status, this.waitNote, controls, this.nav, this.pane, this.makeSide(), this.feedback, this.makeLog());
     for (const corner of ['lu', 'mu', 'ru', 'ls', 'rs', 'ld', 'md', 'rd']) panel.append(el('div', null, 'frame ' + corner));
-    panel.append(header, this.body); this.root.append(style, panel);
+    panel.append(header, this.body); this.root.append(style, panel, this.makeOrb());
+    this.panel = panel;
     this.tip = el('div', null, 'skill-tip'); this.tip.hidden = true; this.root.append(this.tip);
-    this.dragBy(header, host);
+    // The panel's spot is remembered across reloads (global, like the minimised icon's).
+    this.dragBy(header, host, () => { if (host.style.left) this.uiPrefs({ panel: { x: host.offsetLeft, y: host.offsetTop } }); });
+    W.addEventListener('resize', () => { if (this.notesBox) this.fitWindow(this.notesBox); });
+    this.setWide(!!this.uiPrefs().wide, false);
     this.draw(); this.update();
+    this.restorePanel();
+    if (this.uiPrefs().minimised) this.minimise(true);
+  },
+  // Minimised window: a skill-slot sized icon with a status dot. The bot keeps running.
+  // Global (not per character) and kept in this page's storage, like the window position.
+  uiPrefs(patch) {
+    let prefs = {};
+    try { prefs = JSON.parse(W.localStorage.getItem('sroLean:ui') || '{}') || {}; } catch {}
+    if (patch) { prefs = { ...prefs, ...patch }; try { W.localStorage.setItem('sroLean:ui', JSON.stringify(prefs)); } catch {} }
+    return prefs;
+  },
+  // Like Icons.paint, for an image that is not under icon/ (the map button is interface art).
+  paintPath(node, path) {
+    Icons.url(path).then(url => {
+      if (!url || !node.isConnected) return;
+      const image = el('img'); image.alt = ''; image.draggable = false;
+      image.addEventListener('load', () => { node.dataset.iconLoaded = 'true'; });
+      image.src = url; node.prepend(image);
+    });
+  },
+  // What the bot is doing, for the status strip and the minimised icon: ok (hunting), busy or stop.
+  botState() {
+    const dead = World.inWorld() && World.isDead(), mode = Controller.mode, error = mode === 'error';
+    // Busy comes from the live trips, not from Controller.mode: that label lags a tick behind (it still says
+    // "returning" for up to 100 ms after Stop all ended a walk-back).
+    const busy = Town.trip ? 'Town trip' : WalkBack.active ? 'Returning' : Reconnect.active() ? 'Reconnecting' : Restock.trip ? 'Shopping'
+      : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Alchemy.run || Alchemy.pending ? 'Alchemy' : '';
+    const label = dead ? 'Dead' : error ? 'Error' : busy || (Hunt.running ? 'Hunting' : 'Stopped');
+    // `note` is what only the state can say; the icon falls back to the first wait reason, which the wide window shows below the strip.
+    const note = Town.trip ? Town.status() : Reconnect.active() && Reconnect.message ? Reconnect.message
+      : Restock.recording ? 'Recording route: ' + Restock.draft.route.length + ' points' : '';
+    const reason = note || (this.waitNote?.textContent || '').split('\n')[0];
+    return { key: dead || error ? 'stop' : busy ? 'busy' : Hunt.running ? 'ok' : 'stop', label, dead, note, reason };
+  },
+  // Wide window: status strip on top, page list on the left, session numbers on the right, activity log below.
+  // The pages themselves are the same as in the compact window. A global choice, kept with the window position.
+  setWide(on, save = true) {
+    this.wide = on;
+    this.root.host.classList.toggle('wide', on);
+    this.layoutButton.textContent = on ? 'Compact' : 'Wide';
+    if (save) this.uiPrefs({ wide: on });
+    if (on) { Stats.loadLevels(); this.updateWide(); }
+    if (!this.minimised && this.root.host.style.left) this.fitWindow(this.root.host);
+  },
+  readout(parent, label, group) {
+    const value = el('b'); value.setAttribute('aria-label', group + ': ' + label);
+    const row = el('div', null, 'readout'); row.append(el('span', label), value); parent.append(row);
+    return value;
+  },
+  makeStrip() {
+    const strip = el('div', null, 'strip wide-only');
+    this.stripName = el('strong'); this.stripLine = el('span', '', 'muted');
+    const who = el('div', null, 'who'); who.append(this.stripName, this.stripLine);
+    const bars = el('div', null, 'bars'); this.bars = {};
+    for (const [key, label] of [['hp', 'HP'], ['mp', 'MP'], ['xp', 'EXP']]) {
+      const fill = el('i'), text = el('span'), track = el('div', null, 'track'); track.append(fill);
+      const row = el('div', null, 'gauge ' + key); row.append(el('label', label), track, text); bars.append(row);
+      this.bars[key] = { fill, text };
+    }
+    this.stripState = el('div', null, 'state'); this.stripLabel = el('strong'); this.stripReason = el('span');
+    this.stripState.append(el('i', null, 'state-dot'), this.stripLabel, this.stripReason);
+    strip.append(who, bars, this.stripState);
+    return strip;
+  },
+  makeSide() {
+    const side = el('aside', null, 'side wide-only'); this.sideFields = {};
+    const session = this.group('Session');
+    for (const [key, label] of [['time', 'Hunting time'], ['rate', 'XP / hour'], ['xp', 'XP gained'], ['gold', 'Net gold'], ['kills', 'Kills'], ['deaths', 'Deaths'], ['sox', 'SoX found'], ['items', 'Items picked up'], ['potions', 'Potions used']])
+      this.sideFields[key] = this.readout(session, label, 'Session');
+    session.append(this.button('Reset session', () => Stats.reset()));
+    const supplies = this.group('Supplies');
+    for (const [key, label] of [['hp', 'HP potions'], ['mp', 'MP potions'], ['bag', 'Free bag slots'], ['pet', 'Pet bag'], ['spot', 'Hunting spot']])
+      this.sideFields[key] = this.readout(supplies, label, 'Supplies');
+    side.append(session, supplies);
+    return side;
+  },
+  makeLog() {
+    const box = el('div', null, 'logbox wide-only');
+    this.logList = el('ol', null, 'log'); this.logList.setAttribute('aria-label', 'Activity');
+    box.append(el('strong', 'Activity'), this.logList);
+    return box;
+  },
+  updateWide() {
+    if (!this.wide || !this.bars || this.minimised) return;
+    const me = World.me(), p = World.gp?.progression || {}, live = World.inWorld();
+    const level = p.level, required = Stats.integer(Stats.levels?.[level]?.expRequired), xp = Stats.integer(p.experience);
+    const xpPct = required && xp !== null ? Number(xp * 10000n / required) / 100 : null;
+    this.stripName.textContent = World.charName || 'No character';
+    this.stripLine.textContent = live ? `Level ${level ?? '?'}` : World.phase || 'Waiting for game…';
+    const n = v => Math.round(v).toLocaleString('en-US');
+    const setBar = (key, pct, text) => {
+      this.bars[key].fill.style.width = (live && Number.isFinite(pct) ? clamp(pct, 0, 100) : 0) + '%';
+      this.bars[key].text.textContent = live ? text : '—';
+    };
+    setBar('hp', me.hpPct, `${n(me.hp)} / ${n(me.maxHp)}`);
+    setBar('mp', me.mpPct, `${n(me.mp)} / ${n(me.maxMp)}`);
+    setBar('xp', xpPct, xpPct === null ? '—' : xpPct.toFixed(2) + ' %');
+    const state = this.botState();
+    this.stripState.dataset.state = state.key; this.stripLabel.textContent = state.label;
+    this.stripReason.textContent = state.note || (Hunt.running ? `Mode: ${Controller.mode}` : 'Press F8 to start');
+    const s = Stats.display();
+    for (const key of ['time', 'rate', 'xp', 'gold', 'kills', 'deaths', 'sox', 'items', 'potions']) this.sideFields[key].textContent = s[key];
+    const pet = live ? Loot.pet() : null, center = Settings.profile.hunt.center, distance = center && live ? dist2D(World.pose(), center) : Infinity;
+    this.sideFields.hp.textContent = live ? n(Potion.count('hp')) : '—';
+    this.sideFields.mp.textContent = live ? n(Potion.count('mp')) : '—';
+    this.sideFields.bag.textContent = live ? String(World.freeBagSlots()) : '—';
+    this.sideFields.pet.textContent = pet ? `${pet.rec.inventory.length} / ${pet.rec.status}` : 'none';
+    this.sideFields.spot.textContent = Number.isFinite(distance) ? Math.round(distance / 10) + ' m away' : center ? 'another region' : 'not saved';
+    // The log is rebuilt only when a line was added, newest at the bottom; it follows new lines unless scrolled up.
+    const last = Log.lines[Log.lines.length - 1];
+    if (last !== this.logLast) {
+      this.logLast = last;
+      const two = v => String(v).padStart(2, '0');
+      // A notice is also logged on its own; show "Hunting stopped" and "Hunting stopped." from the same moment once.
+      const same = (a, b) => a && b && Math.abs(a.at - b.at) < 1000 && a.text.replace(/\.$/, '') === b.text.replace(/\.$/, '');
+      const lines = Log.lines.filter(l => l.level !== 'cmd').slice(-60).filter((l, i, all) => !same(all[i - 1], l)).slice(-40);
+      const rows = lines.map(l => {
+        const row = el('li', null, l.level), at = new Date(l.at);
+        row.append(el('time', `${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`), el('span', l.text));
+        return row;
+      });
+      const atEnd = this.logList.scrollTop + this.logList.clientHeight >= this.logList.scrollHeight - 4;
+      this.logList.replaceChildren(...rows);
+      if (atEnd) this.logList.scrollTop = this.logList.scrollHeight;
+    }
+  },
+  makeOrb() {
+    const orb = this.orb = el('button', null, 'orb'); orb.type = 'button'; orb.hidden = true;
+    orb.setAttribute('aria-label', 'Show bot window');
+    this.orbState = el('strong'); this.orbDetail = el('span'); this.orbVitals = el('span', '', 'muted');
+    const tip = el('div', null, 'orb-tip'); tip.append(this.orbState, this.orbDetail, this.orbVitals, el('em', 'Click to open · drag to move'));
+    orb.append(el('span', 'nb', 'orb-mark'), el('i', null, 'orb-dot'), tip);
+    Icons.paint(orb, 'action\\icon_cha_auto_attack.ddj');
+    let drag = null;
+    orb.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      drag = { x: e.clientX, y: e.clientY, left: this.root.host.offsetLeft, top: this.root.host.offsetTop, moved: false };
+      orb.setPointerCapture(e.pointerId);
+    });
+    orb.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+      if (drag.moved) this.placeOrb(drag.left + dx, drag.top + dy);
+    });
+    const done = () => {
+      if (!drag) return;
+      if (drag.moved) { this.orbDragged = true; this.uiPrefs({ orb: { x: this.root.host.offsetLeft, y: this.root.host.offsetTop } }); }
+      drag = null;
+    };
+    orb.addEventListener('pointerup', done); orb.addEventListener('pointercancel', done);
+    orb.addEventListener('click', () => { if (this.orbDragged) { this.orbDragged = false; return; } this.minimise(false); });
+    orb.addEventListener('pointerenter', () => { if (this.orbAlert) setTimeout(() => { this.orbAlert = ''; this.updateOrb(); }, 2500); });
+    return orb;
+  },
+  // Put the panel at its saved spot, kept on screen; without one it uses the default top-right position.
+  restorePanel() {
+    const host = this.root.host, saved = this.uiPrefs().panel;
+    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+      host.style.right = 'auto'; host.style.left = saved.x + 'px'; host.style.top = saved.y + 'px'; this.fitWindow(host);
+    } else { host.style.left = ''; host.style.top = ''; host.style.right = ''; }
+  },
+  placeOrb(x, y) {
+    const host = this.root.host;
+    host.style.right = 'auto';
+    host.style.left = clamp(x, 0, Math.max(0, innerWidth - 44)) + 'px';
+    host.style.top = clamp(y, 0, Math.max(0, innerHeight - 44)) + 'px';
+  },
+  minimise(on) {
+    const host = this.root?.host;
+    if (!host || !!this.minimised === on) return;
+    this.minimised = on;
+    if (on) {
+      const r = host.getBoundingClientRect();
+      const saved = this.uiPrefs().orb;
+      host.classList.add('min'); this.panel.hidden = true; this.orb.hidden = false;
+      if (saved) this.placeOrb(saved.x, saved.y); else this.placeOrb(r.right - 44, r.top + 4);
+      if (this.tip) this.tip.hidden = true;
+    } else {
+      host.classList.remove('min'); this.panel.hidden = false; this.orb.hidden = true; this.orbAlert = '';
+      this.restorePanel();
+    }
+    this.uiPrefs({ minimised: on });
+    this.updateOrb();
+  },
+  // Pulse the icon for something that needs the player while the window is minimised.
+  alertOrb(text) {
+    if (!this.minimised) return;
+    this.orbAlert = text; this.updateOrb();
+  },
+  updateOrb() {
+    if (!this.orb || !this.minimised) return;
+    const state = this.botState();
+    if (state.dead && !this.orbWasDead && Hunt.running) this.alertOrb('Character died.');
+    this.orbWasDead = state.dead;
+    this.orb.dataset.state = state.key;
+    this.orb.classList.toggle('alert', !!this.orbAlert);
+    this.orb.classList.toggle('left', this.root.host.offsetLeft < 280);
+    this.orbState.textContent = this.orbAlert ? 'Needs you' : state.label;
+    this.orbDetail.textContent = this.orbAlert || state.reason || (Hunt.running ? 'Hunting' : 'Press F8 to start');
+    const me = World.me();
+    this.orbVitals.textContent = World.inWorld() ? `${World.charName || ''} · HP ${Math.round(me.hpPct)}% · MP ${Math.round(me.mpPct)}%` : '';
   },
   skillOptions() {
     return [[0, 'Choose a learned skill'], ...(World.gp?.skills || []).map(id => World.skill(id)).filter(s => s && !s.groundTarget).map(s => [s.id, s.name || '#' + s.id])];
@@ -6463,19 +8596,25 @@ const UI = {
     } else if (this.current === 'Loot') {
       const L = () => H().pickup;
       const options = this.group('Collection');
-      options.append(this.select('Collector', [['character', 'Character'], ['pet', 'Pickup pet']], () => L().collector, v => { L().collector = v; Loot.reset(); }),
-);
+      options.append(this.select('Default collector', [['character', 'Character'], ['pet', 'Pickup pet']], () => L().collector, v => { L().collector = v; Loot.reset(); }));
       options.append(this.check('Chime when pet bag is full', () => L().petFullSound, v => { L().petFullSound = v; Loot.fullAlert = null; }), this.button('Test pet chime', () => Sound.test()),
         this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')));
       this.petNote = el('p', '', 'muted'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
-      for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['gold', 'Gold'], ['potions', 'Potions and cure pills'], ['equipment', 'Equipment'], ['elixirs', 'Elixirs'], ['powders', 'Lucky powders'], ['magicStones', 'Magic stones (stored in the warehouse)'], ['attrStones', 'Attribute stones (stored in the warehouse)'], ['alchemy', 'Other alchemy items'], ['others', 'Other items'], ['afterKillOnly', 'Finish current fight before character pickup']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
+      for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
+      const kinds = this.group('Who picks up what');
+      for (const [key, label] of [['gold', 'Gold'], ['potions', 'Potions and cure pills'], ['equipment', 'Equipment'], ['elixirs', 'Elixirs'], ['powders', 'Lucky powders'], ['magicStones', 'Magic stones (stored in the warehouse)'], ['attrStones', 'Attribute stones (stored in the warehouse)'], ['alchemy', 'Other alchemy items'], ['others', 'Other items']])
+        kinds.append(this.select(label, [['off', 'Leave on the ground'], ['pet', 'Pickup pet'], ['character', 'Character']],
+          () => L()[key] ? Loot.collectorFor(key) : 'off',
+          v => { if (v === 'off') L()[key] = false; else { L()[key] = true; (L().by ||= {})[key] = v; } Loot.reset(); }));
+      kinds.append(el('p', 'Each kind of drop is either left alone, taken by your pickup pet, or taken by the character. The pet collects while you fight and fills its own bag; the character walks to the item and uses your bag, so give it only the few kinds you want on you (for example potions or pills). The default collector decides for kinds you have not set yourself and for names under Always include.', 'muted'));
       options.append(this.number('Pickup radius (m)', () => L().radius / 10, v => L().radius = v * 10, 3, 100),
         this.number('Retries after first attempt', () => L().retries, v => L().retries = v, 0, 3),
         this.text('Always include names', () => L().include, v => L().include = v),
         this.text('Exclude names', () => L().exclude, v => L().exclude = v),
-        el('p', 'Pets collect during combat regardless of the finish-fight setting. Inventory transactions and potion priority can briefly delay pet requests. Equipment: only SoX takes Star, Moon and Sun gear and leaves plain equipment, even when Equipment or an Always include name matches it; other items follow their own switches. It needs the item catalogue, which loads automatically. Presets clear Always include names; exclusions still apply. Other items excludes the separate categories above. Ownership and bag capacity always apply. Failed pickups use a backoff.', 'muted'));
+        el('p', 'Pets collect during combat regardless of the finish-fight setting, which applies to the character only. Inventory transactions and potion priority can briefly delay pet requests. Equipment: only SoX takes Star, Moon and Sun gear and leaves plain equipment, even when Equipment or an Always include name matches it; other items follow their own switches. It needs the item catalogue, which loads automatically. Presets clear Always include names; exclusions still apply. Other items excludes the separate categories above. Ownership and bag capacity always apply. Failed pickups use a backoff.', 'muted'));
       this.pane.append(options);
+      this.pane.append(kinds);
     } else if (this.current === 'Supplies') {
       const pots = this.group('Automatic potion use', this.check('Use potions automatically', () => P().enabled, v => P().enabled = v));
       this.speedNote = el('p', '', 'muted');
@@ -6513,14 +8652,40 @@ const UI = {
         el('p', 'Buys only Special Universal Pill (small), the strongest universal cure. No cheaper substitute. Uses the same refill trips as HP/MP. Use cure pills above controls automatic use.', 'muted'));
       shop.append(el('p', 'Refill targets are total potion counts, including what is already in your bag. Used for low-supply, full-bag and revival trips, and walking-route restock when the town cycle is off. Set MP refill to 1000 for 1,000 MP potions. Changes apply to the next trip.', 'muted'));
       this.pane.append(shop);
+      this.pane.append(el('p', 'Town trips, what starts them, and arrows and bolts are on the Town page.', 'muted'));
+    } else if (this.current === 'Town') {
       const town = () => Town.cfg();
-      const services = this.group('Scroll town cycle',
-        this.check('Use return scroll → town services → reverse return', () => town().enabled, v => { town().enabled = v; this.draw(); }),
-        this.check('Revive in town and reverse to last scroll point', () => town().revive, v => town().revive = v),
-        this.check('Deposit SoX gear in the warehouse (character and pet bags)', () => town().storeSox, v => town().storeSox = v),
-        this.text('Also deposit gear requiring level', () => town().storeLevels, v => town().storeLevels = v, 'e.g. 85 or 80-90, 100'),
+      // The trip as the game's own item pictures, with what each step still needs.
+      const flow = el('ol', null, 'trip-flow'), count = type => World.items().filter(i => (i.typeFlags & 0xfffc) === type).reduce((n, i) => n + (i.quantity ?? 1), 0);
+      for (const [icon, label, detail] of [
+        ['mall_return_scroll', 'Return scroll', () => town().arrival ? count(0x09ec) + ' in bag' : 'arrival not saved'],
+        ['mall_warehouse_ticket', 'Warehouse', () => town().storage ? 'saved' : 'not saved'],
+        ['all_potion_03', 'Potions', () => town().vendor ? 'saved' : 'not saved'],
+        ['mall_repair_hammer', 'Repair', () => town().smith ? 'saved' : 'not saved'],
+        ['mall_reverse_return_scroll', 'Reverse', () => count(0x19ec) + ' in bag']]) {
+        const step = el('li'), slot = el('span', null, 'skill-icon'), note = el('small', detail());
+        slot.append(el('span', label[0], 'fallback')); Icons.paint(slot, `item\\etc\\${icon}.ddj`);
+        step.append(slot, el('strong', label), note); flow.append(step);
+        this.refreshers.push(() => { note.textContent = detail(); note.classList.toggle('missing', /not saved|^0 in bag/.test(note.textContent)); });
+      }
+      this.pane.append(this.group('The town trip', flow));
+      this.pane.append(this.group('Go to town when…',
+        el('p', 'Only while the scroll town cycle below is on. Always: the character bag has one free slot or less. Potions, vigor potions and pills: at the low-stock numbers in Supplies. Arrows and bolts: below.', 'muted'),
         this.check('Return when pickup pet is nearly full', () => town().petFull, v => town().petFull = v),
         this.number('Pet free slots ≤', () => town().petFree, v => town().petFree = v, 0, 10),
+        this.check('Weapon is broken', () => town().broken, v => town().broken = v),
+        this.check('Gear is worn', () => town().wear.on, v => town().wear.on = v),
+        this.number('Gear durability below (%)', () => town().wear.pct, v => town().wear.pct = v, 1, 90),
+        this.check('No XP for a while', () => town().noXp.on, v => town().noXp.on = v),
+        this.number('No XP for (minutes)', () => town().noXp.minutes, v => town().noXp.minutes = v, 1, 120),
+        this.check('On a timer', () => town().every.on, v => town().every.on = v),
+        this.number('Every (minutes)', () => town().every.minutes, v => town().every.minutes = v, 5, 600),
+        this.check('Revive in town and reverse to last scroll point', () => town().revive, v => town().revive = v),
+        el('p', 'Worn gear means the most worn repairable item you are wearing, measured against its own maximum durability; the trip repairs it. A broken weapon (0 durability) has its own switch, on by default. The XP and timer clocks run only while hunting and restart with every trip.', 'muted')));
+      const services = this.group('Scroll town cycle',
+        this.check('Use return scroll → town services → reverse return', () => town().enabled, v => { town().enabled = v; this.draw(); }),
+        this.check('Deposit SoX gear in the warehouse (character and pet bags)', () => town().storeSox, v => town().storeSox = v),
+        this.text('Also deposit gear requiring level', () => town().storeLevels, v => town().storeLevels = v, 'e.g. 85 or 80-90, 100'),
         this.number('Town arrival tolerance (m)', () => town().arrivalRadius / 10, v => town().arrivalRadius = v * 10, 10, 150),
         el('p', 'Bind your recall to Hotan, Jangan, Donwhang, Constantinople or Samarkand in the game. Quickest: while stopped, use a return scroll and press Auto-set town services where it puts you; it fills the arrival point and the four services. To do it by hand instead, save the arrival point where a return scroll places you, then stand near, select and save the warehouse, potion merchant, repair merchant and world statue / teleport. Open the potion shop before saving its merchant. Saves your standing position for each approach. Uses collision-aware walking between services. Overrides the recorded walking restock while enabled.', 'muted'));
       for (const [role, label] of [['arrival', 'Arrival point'], ['storage', 'Warehouse'], ['vendor', 'Potion merchant'], ['smith', 'Repair merchant'], ['gate', 'World statue / teleport']]) services.append(
@@ -6530,30 +8695,77 @@ const UI = {
       services.append(this.text('Keep in pet (names)', () => town().keep, v => town().keep = v),
         el('p', 'Town buys X-Large potions using the Buy HP/MP switches, low-stock thresholds and refill counts above. Keep each low-stock threshold below its refill target. Potion selections apply to walking-route restock. Returns when the character bag has at most one free slot. Free at least two slots before hunting again; existing character items stay protected. Revival uses the saved town services and a reverse scroll, without using a return scroll in town. Pet loot passes through one reserved character bag slot. Potions, return/reverse scrolls, beginner speed scrolls and matching Keep names are protected. Refills travel scrolls to two where sold for gold; otherwise carry spares. F8 cancels.', 'muted'));
       this.townNote = el('p', Town.status(), 'muted'); services.append(this.townNote); this.pane.append(services);
-    } else if (this.current === 'Alchemy') {
-      Alchemy.draw();
-    } else if (this.current === 'Wardrobe') {
-      LeanWardrobe.draw(this.pane);
-    } else {
-      Stats.draw(this.pane);
-      this.pane.append(this.group('Behaviour',
-        ...(Town.autoRevive() ? [el('p', 'On death: the town cycle revives you in town and reverses back (Supplies → Scroll town cycle).', 'muted')]
-          : [this.select('On death', [['stop', 'Stop'], ['wait', 'Wait'], ['revive', 'Revive and walk back']], () => H().onDeath, v => H().onDeath = v)]),
-        this.check('Rest when low', () => H().sit.enabled, v => { H().sit.enabled = v; this.draw(); }),
-        ...(H().sit.enabled ? [
-          this.number('Rest below HP (%)', () => H().sit.hpBelow, v => H().sit.hpBelow = v, 0, 95),
-          this.number('Rest below MP (%)', () => H().sit.mpBelow, v => H().sit.mpBelow = v, 0, 95),
-          this.number('Stand up at (%)', () => H().sit.resumeAt, v => H().sit.resumeAt = v, 30, 100)] : []),
-        this.check('Stop when HP potions run out', () => H().stopNoHpPotion, v => H().stopNoHpPotion = v),
-        this.check('Stop when bag is full', () => H().stopInvFull, v => H().stopInvFull = v),
-        this.number('Manual control pause (s)', () => H().manualPauseS, v => H().manualPauseS = v, 1, 30)));
-      this.stuckNote = el('p', AntiStuck.status(), 'muted');
-      this.pane.append(this.group('Anti-stuck',
-        this.check('Recover when hunting makes no progress', () => H().antiStuck.enabled, v => H().antiStuck.enabled = v),
-        this.number('No progress for (minutes)', () => H().antiStuck.minutes, v => H().antiStuck.minutes = v, 1, 30),
-        this.number('Stop after failed recoveries', () => H().antiStuck.maxRecoveries, v => H().antiStuck.maxRecoveries = v, 1, 10),
-        this.stuckNote,
-        el('p', 'Progress means a confirmed kill, XP, gold, a pickup, or damage to your target. Resting, buffing, looting, shopping and town trips do not count against you. First recovery drops the current target; the next ones walk back to the saved hunting spot; after the last one hunting stops.', 'muted')));
+      const ammo = () => C().ammo;
+      this.pane.append(this.group('Arrows and bolts',
+        this.check('Buy arrows on town trips', () => ammo().arrow.on, v => ammo().arrow.on = v),
+        this.number('Arrows: go to town at or below', () => ammo().arrow.low, v => ammo().arrow.low = v, 0, 9999),
+        this.number('Arrows: refill to', () => ammo().arrow.target, v => ammo().arrow.target = v, 1, 10000),
+        this.check('Buy bolts on town trips', () => ammo().bolt.on, v => ammo().bolt.on = v),
+        this.number('Bolts: go to town at or below', () => ammo().bolt.low, v => ammo().bolt.low = v, 0, 9999),
+        this.number('Bolts: refill to', () => ammo().bolt.target, v => ammo().bolt.target = v, 1, 10000),
+        el('p', 'Bought at the repair merchant after selling pet loot and before repairing. The count includes the stack in your ammunition slot and any spare stacks in the bag. A trip also starts when the count falls to the low-stock number. If the merchant does not sell it, there is no bag space or not enough gold, that item is skipped and the rest of the trip goes on. Equipping the bought ammunition is up to you.', 'muted')));
+    } else if (this.current === 'Party') {
+      const S = () => Settings.profile.party.support;
+      // Live party: HP and MP bars, distance, and which of the assigned buffs each member shows right now.
+      const list = el('div', null, 'members'), rows = el('p', '', 'muted');
+      const renderMembers = () => {
+        const members = Support.members().filter(m => !m.self);
+        if (!members.length) { list.replaceChildren(el('div', 'Not in a party.', 'empty')); return; }
+        list.replaceChildren(...members.map(m => {
+          const row = el('div', null, 'member' + (m.alive ? '' : ' dead'));
+          const bars = el('div', null, 'member-bars');
+          for (const [key, pct] of [['hp', m.hpPct], ['mp', m.mpPct]]) { const bar = el('div', null, 'pbar ' + key), fill = el('i'); fill.style.width = clamp(pct, 0, 100) + '%'; bar.append(fill); bars.append(bar); }
+          const name = el('div', null, 'member-name');
+          name.append(el('strong', m.name), el('span', `Lv ${m.level ?? '?'} · ${!m.alive ? 'dead' : !m.entity ? 'out of view' : Math.round(m.distance / 10) + ' m' + (m.inRange ? '' : ' (out of range)')}`, 'muted'));
+          const buffs = el('div', null, 'member-buffs');
+          for (const b of S().buffs) {
+            const id = Support.skillOf(b), only = splitList(b.only || '');
+            if (!id || only.length && !only.includes(m.name.toLowerCase())) continue;
+            const slot = el('span', null, 'skill-icon' + (m.gid && Support.has(m.gid, id) ? ' on' : ' off')); slot.title = World.skillName(id);
+            slot.append(el('span', '·', 'fallback')); Icons.paint(slot, World.skill(id)?.icon); buffs.append(slot);
+          }
+          row.append(name, bars, buffs); return row;
+        }));
+        rows.textContent = Support.message;
+      };
+      renderMembers(); this.refreshers.push(renderMembers);
+      this.pane.append(this.group('Party members', list, rows));
+      const skillOptions = skills => () => [[0, 'None'], ...skills().map(s => [s.id, s.name || '#' + s.id])];
+      const pick = entry => v => { const id = Number(v); entry().id = id; entry().group = id ? World.skill(id)?.group ?? id : 0; };
+      this.pane.append(this.group('Heal and buff the party',
+        this.check('Buff and heal party members', () => S().enabled, v => { S().enabled = v; Support.reset(); }),
+        this.check('Also while hunting is stopped', () => S().whileStopped, v => S().whileStopped = v),
+        this.number('Support range (m)', () => S().range, v => S().range = v, 5, 60),
+        this.select('Heal skill', skillOptions(() => Support.friendlySkills()), () => Support.skillOf(S().heal) || 0, pick(() => S().heal)),
+        this.number('Heal below (%)', () => S().heal.pct, v => S().heal.pct = v, 10, 95),
+        this.check('Heal myself too', () => S().heal.self, v => S().heal.self = v),
+        this.select('Group heal skill', skillOptions(() => Support.areaSkills()), () => Support.skillOf(S().group) || 0, pick(() => S().group)),
+        this.number('Group heal below (%)', () => S().group.pct, v => S().group.pct = v, 10, 95),
+        this.number('Group heal when this many are low', () => S().group.count, v => S().group.count = v, 2, 8),
+        el('p', 'Casts only on members you can see within the support range; it never walks to them. Order: group heal, then a heal on the lowest member, then missing buffs, one cast at a time. HP is exact for members in view. Your own potions still come first.', 'muted')));
+      // Party buffs: skills that can be cast on another member, each with an optional list of who gets it.
+      const buffs = this.group('Party buffs'), chosen = () => S().buffs;
+      if (!chosen().length) buffs.append(el('div', 'No party buffs chosen. Pick from the icons below.', 'empty'));
+      chosen().forEach((b, i) => {
+        const id = Support.skillOf(b), info = el('div', null, 'skill-info');
+        info.append(el('span', World.skillName(id), 'skill-name'), el('span', this.skillDetails(id), 'skill-detail'));
+        const remove = this.button('×', () => { chosen().splice(i, 1); Settings.saveProfile(); this.draw(); });
+        remove.className = 'mini'; remove.setAttribute('aria-label', 'Delete party buff ' + World.skillName(id));
+        const row = el('div', null, 'skill-row'); row.append(this.skillSlot(id, () => {}, World.skillName(id)), info, remove);
+        buffs.append(row, this.text('Only these members: ' + World.skillName(id), () => b.only || '', v => b.only = v, 'everyone (or names, comma-separated)'));
+      });
+      const grid = el('div', null, 'grid'); grid.setAttribute('aria-label', 'Party buff skill icons');
+      for (const s of Support.friendlySkills()) {
+        const group = s.group ?? s.id, selected = chosen().some(b => b.group === group);
+        grid.append(this.skillSlot(s.id, () => {
+          const index = chosen().findIndex(b => b.group === group);
+          if (index >= 0) chosen().splice(index, 1); else chosen().push({ id: s.id, group, only: '' });
+          Settings.saveProfile(); this.draw();
+        }, (selected ? 'Unselect ' : 'Add ') + World.skillName(s.id), selected));
+      }
+      buffs.append(el('div', 'Learned skills you can cast on a party member', 'muted'), grid);
+      if (!grid.children.length) buffs.append(el('div', 'No learned skill can target a party member.', 'empty'));
+      this.pane.append(buffs);
       const party = () => Settings.profile.party;
       this.partyNote = el('p', '', 'muted');
       this.pane.append(this.group('Party',
@@ -6573,6 +8785,42 @@ const UI = {
         this.check('Auto-resurrect party members', () => party().autoRes, v => { party().autoRes = v; Resurrect.reset(); }),
         this.number('Maximum res distance from hunt spot (m)', () => party().resRadius / 10, v => party().resRadius = v * 10, 1, 100),
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Travel, shopping and manual control take priority.', 'muted')));
+    } else if (this.current === 'Items') {
+      this.drawItems();
+    } else if (this.current === 'Map') {
+      LeanMap.draw(this.pane);
+    } else if (this.current === 'Alchemy') {
+      Alchemy.draw();
+    } else if (this.current === 'Wardrobe') {
+      LeanWardrobe.draw(this.pane);
+    } else {
+      Stats.draw(this.pane);
+      this.pane.append(this.group('Behaviour',
+        ...(Town.autoRevive() ? [el('p', 'On death: the town cycle revives you in town and reverses back (Supplies → Scroll town cycle).', 'muted')]
+          : [this.select('On death', [['stop', 'Stop'], ['wait', 'Wait'], ['revive', 'Revive and walk back']], () => H().onDeath, v => H().onDeath = v)]),
+        this.check('Rest when low', () => H().sit.enabled, v => { H().sit.enabled = v; this.draw(); }),
+        ...(H().sit.enabled ? [
+          this.number('Rest below HP (%)', () => H().sit.hpBelow, v => H().sit.hpBelow = v, 0, 95),
+          this.number('Rest below MP (%)', () => H().sit.mpBelow, v => H().sit.mpBelow = v, 0, 95),
+          this.number('Stand up at (%)', () => H().sit.resumeAt, v => H().sit.resumeAt = v, 30, 100)] : []),
+        this.check('Stop when HP potions run out', () => H().stopNoHpPotion, v => H().stopNoHpPotion = v),
+        this.check('Stop when bag is full', () => H().stopInvFull, v => H().stopInvFull = v),
+        this.number('Manual control pause (s)', () => H().manualPauseS, v => H().manualPauseS = v, 1, 30)));
+      this.pane.append(this.group('Obstacles',
+        this.check('Walk around obstacles when chasing a mob', () => H().detour.enabled, v => H().detour.enabled = v),
+        this.number('Approach progress check interval (ms)', () => H().detour.stallMs, v => H().detour.stallMs = v, 1000, 10000),
+        this.check('Detect a character that cannot move', () => H().trap.enabled, v => H().trap.enabled = v),
+        this.number('Cannot move for (seconds)', () => H().trap.seconds, v => H().trap.seconds = v, 10, 120),
+        this.check('Recall to town if legal escape attempts fail', () => H().trap.recall, v => H().trap.recall = v),
+        this.check('Keep detailed escape diagnostics locally', () => H().trap.diagnostics, v => H().trap.diagnostics = v),
+        el('p', 'Checks blocked approaches before repeating attacks, follows collision-checked detours and stops/releases unreachable targets. Failed approaches are remembered briefly. Escape retries refused movement and requires fresh, stable arrival plus a second move before hunting resumes. Optional recall needs a configured scroll town cycle and stops in town instead of reversing into the trap. Detailed diagnostics stay local and can include exact positions; both new options are off by default. Unknown collision data cannot authorize an escape', 'muted')));
+      this.stuckNote = el('p', AntiStuck.status(), 'muted');
+      this.pane.append(this.group('Anti-stuck',
+        this.check('Recover when hunting makes no progress', () => H().antiStuck.enabled, v => H().antiStuck.enabled = v),
+        this.number('No progress for (minutes)', () => H().antiStuck.minutes, v => H().antiStuck.minutes = v, 1, 30),
+        this.number('Stop after failed recoveries', () => H().antiStuck.maxRecoveries, v => H().antiStuck.maxRecoveries = v, 1, 10),
+        this.stuckNote,
+        el('p', 'Progress means a confirmed kill, XP, gold, a pickup, or damage to your target. Resting, buffing, looting, shopping and town trips do not count against you. First recovery drops the current target; the next ones walk back to the saved hunting spot; after the last one hunting stops.', 'muted')));
       AutoMastery.draw(this.pane);
       const profileFile = el('input'); profileFile.type = 'file'; profileFile.accept = '.json,application/json'; profileFile.hidden = true;
       profileFile.addEventListener('change', () => {
@@ -6602,6 +8850,113 @@ const UI = {
     this.update();
     this.pane.scrollTop = scroll;
   },
+  // Items page: every item of the game's catalogue with its rule (sBot's item list). Filters re-render only the table,
+  // so typing in the search box keeps its focus. 100 rows per page; bulk buttons apply to everything the filters show.
+  itemFilter: { query: '', group: 'all', race: '', gender: '', kind: '', degrees: new Set(), custom: false, page: 0 },
+  drawItems() {
+    if (!Items.data.size) {
+      this.pane.append(this.group('Items', el('div', 'Loading the game\u2019s item list…', 'empty')));
+      Items.ready().then(() => { if (this.current === 'Items') this.draw(); }, () => { if (this.current === 'Items') this.toast('The item list could not be loaded; try again in a moment.', 'warn'); });
+      return;
+    }
+    const f = this.itemFilter, refresh = () => { f.page = 0; renderTable(); };
+    const choose = (title, options, key) => {
+      const input = el('select'); input.setAttribute('aria-label', title);
+      input.append(...options.map(([value, text]) => { const o = el('option', text); o.value = value; return o; }));
+      input.value = f[key]; input.addEventListener('change', () => { f[key] = input.value; refresh(); });
+      const label = el('label', null, 'field'); label.append(el('span', title), input); return label;
+    };
+    const kinds = ['Head', 'Shoulder', 'Chest', 'Hand', 'Trouser', 'Boot', 'Shield', 'Garment', 'Protector', 'Armor', 'Necklace', 'Earring', 'Ring',
+      'Blade', 'Sword', 'Glaive', 'Spear', 'Bow', '1HSword', '2HSword', 'Axe', 'X-Bow', 'Dagger', 'Staff', 'W-Rod', 'C-Rod', 'Harp'];
+    const search = el('input'); search.type = 'search'; search.placeholder = 'Find an item (name, code or id)'; search.value = f.query; search.setAttribute('aria-label', 'Find an item');
+    search.addEventListener('input', () => { f.query = search.value; refresh(); });
+    const degrees = el('div', null, 'degrees');
+    for (let d = 1; d <= 12; d++) {
+      const box = el('input'); box.type = 'checkbox'; box.checked = f.degrees.has(d); box.setAttribute('aria-label', 'Degree ' + d);
+      box.addEventListener('change', () => { box.checked ? f.degrees.add(d) : f.degrees.delete(d); refresh(); });
+      const label = el('label'); label.append(box, el('span', String(d))); degrees.append(label);
+    }
+    const custom = el('input'); custom.type = 'checkbox'; custom.checked = f.custom; custom.setAttribute('aria-label', 'Only items with a rule');
+    custom.addEventListener('change', () => { f.custom = custom.checked; refresh(); });
+    const customLabel = el('label', null, 'field'); customLabel.append(el('span', 'Only items with a rule'), custom);
+    const nearby = el('input'); nearby.type = 'checkbox'; nearby.checked = !!f.nearby; nearby.setAttribute('aria-label', 'Only items on the ground now');
+    nearby.addEventListener('change', () => { f.nearby = nearby.checked; refresh(); });
+    const nearbyLabel = el('label', null, 'field'); nearbyLabel.append(el('span', 'Only items on the ground now'), nearby);
+    const filters = this.group('Choose items',
+      choose('Item group', [['all', 'All items'], ['equipment', 'Equipment'], ['weapon', 'Weapons'], ['armour', 'Armour and shields'], ['accessory', 'Accessories'], ['potion', 'Potions'],
+        ['pill', 'Pills'], ['alchemy', 'Alchemy'], ['ammo', 'Arrows and bolts'], ['scroll', 'Scrolls'], ['pet', 'Pet items'], ['quest', 'Quest items'], ['mall', 'Item mall'], ['other', 'Other']], 'group'),
+      choose('Race', [['', 'Any'], ['CH', 'Chinese'], ['EU', 'European']], 'race'),
+      choose('Gender', [['', 'Any'], ['Male', 'Male'], ['Female', 'Female']], 'gender'),
+      choose('Type', [['', 'Any'], ...kinds.map(k => [k, k])], 'kind'),
+      el('div', 'Degree', 'muted'), degrees, search, customLabel, nearbyLabel);
+    const bulk = el('div', null, 'row bulk'), table = el('div', null, 'item-table'), pager = el('div', null, 'row pager'), summary = el('p', '', 'muted');
+    table.setAttribute('role', 'table'); table.setAttribute('aria-label', 'Item rules');
+    const rules = this.group('Item rules', summary, bulk, table, pager,
+      el('p', 'Pick: always takes the item whatever the Loot switches say, never leaves it. A rule is for that exact item (each size or degree is its own item), so tick Only items on the ground now to find what is dropping and set the rule on those. Store puts it in the warehouse on town trips (also from your bag, except potions and scrolls the trip needs). Sell sells it from the pet at the repair merchant; your own bag is never sold. Keep never stores or sells it. Drop throws it away from your bag or the pet while hunting, and it is never picked up again. Right-click a row for the same choices.', 'muted'));
+    this.pane.append(filters, rules);
+    const set = (ids, change, label) => { ItemRules.set(ids, change); this.toast(`${label}: ${ids.length} item${ids.length === 1 ? '' : 's'}.`); renderTable(); };
+    // Bulk buttons ask for a second click when they change more than one item.
+    const bulkActions = [['Pick always', { pick: 'yes' }], ['Pick never', { pick: 'no' }], ['Store', { act: 'store' }], ['Sell', { act: 'sell' }], ['Keep', { act: 'keep' }],
+      ['Drop', { act: 'drop' }], ['Clear', { pick: null, act: null }]];
+    let shown = [], armed = null;
+    for (const [label, change] of bulkActions) {
+      const button = this.button(label, () => {
+        const ids = shown.map(i => i.id);
+        if (!ids.length) return;
+        if (ids.length > 1 && armed !== label) {
+          armed = label; button.textContent = `${label} ${ids.length}?`; button.classList.add('armed');
+          setTimeout(() => { if (armed === label) { armed = null; button.textContent = label; button.classList.remove('armed'); } }, 4000);
+          return;
+        }
+        armed = null; button.textContent = label; button.classList.remove('armed'); set(ids, change, label);
+      });
+      button.setAttribute('aria-label', 'All shown: ' + label); bulk.append(button);
+    }
+    const menu = (info, x, y) => {
+      this.itemMenu?.remove();
+      const box = el('div', null, 'item-menu'); box.setAttribute('role', 'menu');
+      box.append(el('strong', info.name));
+      for (const [label, change] of [['Pick always', { pick: 'yes' }], ['Pick never', { pick: 'no' }], ['Pick by Loot switches', { pick: null }], ['Store', { act: 'store' }], ['Sell', { act: 'sell' }],
+        ['Keep', { act: 'keep' }], ['Drop', { act: 'drop' }], ['No action', { act: null }], ['Clear rule', { pick: null, act: null }]]) {
+        const item = this.button(label, () => { box.remove(); set([info.id], change, label); }); item.setAttribute('role', 'menuitem'); box.append(item);
+      }
+      this.root.append(box); this.itemMenu = box;
+      box.style.left = clamp(x, 0, innerWidth - 180) + 'px'; box.style.top = clamp(y, 0, innerHeight - box.offsetHeight - 4) + 'px';
+      setTimeout(() => this.root.addEventListener('pointerdown', e => { if (!box.contains(e.composedPath()[0])) box.remove(); }, { once: true }), 0);
+    };
+    const renderTable = () => {
+      shown = ItemRules.list(f);
+      const pages = Math.max(1, Math.ceil(shown.length / 100)); f.page = clamp(f.page, 0, pages - 1);
+      summary.textContent = `${shown.length.toLocaleString('en-US')} items shown · ${ItemRules.count()} with a rule.`;
+      const head = el('div', null, 'item-row head'); head.setAttribute('role', 'row');
+      for (const text of ['', 'Item', 'Deg', 'Pick', 'Store', 'Sell', 'Keep', 'Drop']) head.append(el('span', text));
+      const rows = shown.slice(f.page * 100, f.page * 100 + 100).map(info => {
+        const rule = ItemRules.get(info.id) || {}, row = el('div', null, 'item-row' + (rule.pick || rule.act ? ' ruled' : ''));
+        row.setAttribute('role', 'row'); row.dataset.id = info.id;
+        const slot = el('span', null, 'skill-icon'); slot.append(el('span', '', 'fallback')); if (info.icon) Icons.paint(slot, info.icon);
+        const name = el('span', null, 'item-name'); name.append(el('span', info.name));
+        if (info.sox) name.append(el('em', ['', 'Star', 'Moon', 'Sun'][info.sox], 'sox'));
+        name.title = info.code + ' · #' + info.id;
+        const pick = this.button(rule.pick === 'yes' ? 'Yes' : rule.pick === 'no' ? 'No' : '–', () =>
+          set([info.id], { pick: rule.pick === 'yes' ? 'no' : rule.pick === 'no' ? null : 'yes' }, 'Pick'));
+        pick.className = 'cell'; pick.setAttribute('aria-label', 'Pick ' + info.name);
+        row.append(slot, name, el('span', info.degree ? String(info.degree) : ''), pick);
+        for (const act of ITEM_ACTIONS) {
+          const cell = this.button(rule.act === act ? '●' : '', () => set([info.id], { act: rule.act === act ? null : act }, act[0].toUpperCase() + act.slice(1)));
+          cell.className = 'cell' + (rule.act === act ? ' on' : ''); cell.setAttribute('aria-label', act[0].toUpperCase() + act.slice(1) + ' ' + info.name);
+          cell.setAttribute('aria-pressed', String(rule.act === act)); row.append(cell);
+        }
+        row.addEventListener('contextmenu', e => { e.preventDefault(); menu(info, e.clientX, e.clientY); });
+        return row;
+      });
+      table.replaceChildren(head, ...rows);
+      if (!rows.length) table.append(el('div', 'No item matches these filters.', 'empty'));
+      const prev = this.button('‹ Previous', () => { f.page--; renderTable(); }), next = this.button('Next ›', () => { f.page++; renderTable(); });
+      prev.disabled = f.page === 0; next.disabled = f.page >= pages - 1;
+      pager.replaceChildren(prev, el('span', `Page ${f.page + 1} of ${pages}`, 'muted'), next);
+    };
+    renderTable();
+  },
   skillKey() {
     return (World.gp?.skills || []).map(id => { const s = World.skill(id); return `${id}:${s?.name}:${s?.icon}:${s?.level}`; }).join('|');
   },
@@ -6611,10 +8966,11 @@ const UI = {
     if (this.current === 'Combat' && this.combatTab === 'Buffs & imbue' && BuffGear.note) BuffGear.note.textContent = BuffGear.status();
     const diagnosticState = Diagnostics.sample();
     if (this.waitNote) { this.waitNote.textContent = Diagnostics.lines(diagnosticState); this.waitNote.title = this.waitNote.textContent; }
+        this.updateOrb(); this.updateWide();
     if (this.townNote) this.townNote.textContent = Town.status();
     if (this.current === 'Settings' && AutoMastery.note) AutoMastery.note.textContent = AutoMastery.status();
     if (this.current === 'Settings' && this.stuckNote) this.stuckNote.textContent = AntiStuck.status();
-    if (this.current === 'Settings' && this.partyNote) {
+    if (this.current === 'Party' && this.partyNote) {
       const notes = [Settings.profile.party.autoRecruit ? Party.message : 'Auto-recruit off.'];
       if (Settings.profile.party.autoRes) notes.push(Resurrect.message);
       this.partyNote.textContent = notes.join(' ');
@@ -6703,14 +9059,15 @@ function boot() {
     else if (e.code === 'F7') {
       e.preventDefault(); e.stopImmediatePropagation();
       if (e.shiftKey) UI.toggleVisibility();
+      else if (UI.minimised) UI.minimise(false);
       else UI.body.hidden = !UI.body.hidden;
     }
   }, true);
   Ticker.start(() => Controller.tick(), 100);
   setInterval(() => { Wardrobe.tick(); UI.update(); }, 500);
   W.SROLean = { version: VERSION, stats: Stats, diagnostics: Diagnostics, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, resurrect: Resurrect,
-    restock: Restock, town: Town, walkBack: WalkBack, antiStuck: AntiStuck, autoMastery: AutoMastery, reconnect: Reconnect, petPotion: PetPotion, navigation: Navigation, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, stop: stopAll, log: Log };
-  Log.info('OpenSRO Bot ready. F8 starts/stops; F7 folds; Shift+F7 hides/shows the window.');
+    restock: Restock, town: Town, walkBack: WalkBack, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, reconnect: Reconnect, petPotion: PetPotion, navigation: Navigation, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, map: LeanMap, support: Support, items: ItemRules, stop: stopAll, log: Log };
+  Log.info('OpenSRO Bot ready. F8 starts/stops; F7 folds; the × minimises; Shift+F7 hides/shows the window.');
 }
 
 installWorkerHook();
